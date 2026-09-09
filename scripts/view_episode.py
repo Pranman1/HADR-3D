@@ -40,6 +40,9 @@ p.add_argument("--bearing", type=float, default=45.0, help="degrees, direction b
 p.add_argument("--seed", type=int, default=0)
 p.add_argument("--web", action="store_true")
 p.add_argument("--save", default=None)
+p.add_argument("--speed", type=float, default=2.0,
+               help="playback speed once the episode is recorded")
+p.add_argument("--paused", action="store_true", help="do not auto-play")
 a = p.parse_args()
 
 t = terr.load(a.map, cell_size_m=a.cell) if a.paper \
@@ -91,11 +94,15 @@ print(f"person {start.tolist()} -> {goal.tolist()} "
       f"({float(reach[goal_cell[0], goal_cell[1]]):.0f} m on foot), fire at {ignite.tolist()}")
 print(f"wind {a.wind} m/s towards {a.bearing} deg\n")
 
-viz.start("hadrsim-episode", web=a.web, save=a.save)
+viz.start("hadrsim-episode", web=a.web, save=a.save,
+          play=not a.paused, speed=a.speed)
 viz.log_terrain(t)
 
 dt = clock.control_dt
+steps_logged = 0
+arrived_at = None
 for step in range(clock.max_steps):
+    steps_logged += 1
     now = step * dt
     wind.step(dt, rng)
     fire.step(dt, wind, rng)
@@ -113,13 +120,19 @@ for step in range(clock.max_steps):
               f"panic {float(human.gamma[0]):.2f}  "
               f"speed {float(human.vel[0].norm()):.2f} m/s"
               f"{'   REACHED' if human.reached[0] else ''}")
-    if human.reached[0]:
-        print(f"\n  reached safety at t={now:.1f}s")
-        break
-else:
-    print(f"\n  never reached safety in {clock.episode_seconds:g}s")
+    if human.reached[0] and arrived_at is None:
+        arrived_at = now
+        print(f"  t={now:6.1f}s  REACHED SAFETY")
+
+# Deliberately keep simulating after the rescue rather than cutting the recording
+# short: watching the fire carry on through the block they just left is most of
+# what makes the scene legible.
+print(f"\n  {'reached safety at t=%.1fs' % arrived_at if arrived_at is not None else 'never reached safety'}"
+      f"  ({clock.episode_seconds:g}s simulated)")
 
 if a.web:
+    print(f"\n  {steps_logged} frames recorded, playing on a loop at {a.speed:g}x.")
+    print("  Scrub the timeline at the bottom of the viewer to move through it.")
     try:
         input("\nserving -- press enter to stop\n")
     except EOFError:

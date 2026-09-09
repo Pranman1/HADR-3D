@@ -59,8 +59,18 @@ def viewer_url(host: str = "localhost") -> str:
     return f"http://{host}:{WEB_PORT}?url={quote(stream, safe='')}"
 
 
-def start(name: str = "hadrsim", web: bool = False, save: str | None = None) -> None:
-    """Open a viewer. web=True serves to a browser -- use that over SSH."""
+TIMELINE = "sim_time"
+
+
+def start(name: str = "hadrsim", web: bool = False, save: str | None = None,
+          play: bool = True, speed: float = 2.0) -> None:
+    """Open a viewer. web=True serves to a browser -- use that over SSH.
+
+    `play` makes the recording start playing on its own timeline and loop.  Without
+    it the viewer opens paused at whatever moment it happens to land on, which for a
+    finished episode means a still picture of a city and no obvious sign that there
+    is anything to scrub -- the natural conclusion being that nothing is happening.
+    """
     rr.init(name, spawn=not (web or save))
     if web:
         # The viewer page and the data stream sit on different ports, so the browser
@@ -72,7 +82,16 @@ def start(name: str = "hadrsim", web: bool = False, save: str | None = None) -> 
         print(f"  from another      {viewer_url(_lan_ip())}\n")
     elif save:
         rr.save(save)
-    rr.send_blueprint(rrb.Spatial3DView(origin="/world", name="hadrsim"))
+    rr.send_blueprint(rrb.Blueprint(
+        rrb.Spatial3DView(origin="/world", name="hadrsim"),
+        rrb.TimePanel(
+            state="expanded",
+            timeline=TIMELINE,
+            play_state="playing" if play else "paused",
+            loop_mode="all" if play else "off",
+            playback_speed=speed,
+        ),
+    ))
 
 
 def log_terrain(terrain, path: str = "/world/terrain") -> None:
@@ -83,7 +102,7 @@ def log_terrain(terrain, path: str = "/world/terrain") -> None:
     outlines, falls back to one box per cell.  The simulation sees the same grid
     either way -- this only changes what you look at.
     """
-    rr.set_time("sim_time", duration=0.0)
+    rr.set_time(TIMELINE, duration=0.0)
     cs = terrain.cell_size_m
 
     if terrain.footprints:
@@ -212,7 +231,7 @@ C_SMOKE = [176, 176, 180]
 
 
 def log_time(t_s: float) -> None:
-    rr.set_time("sim_time", duration=float(t_s))
+    rr.set_time(TIMELINE, duration=float(t_s))
 
 
 def log_fire(fire, path: str = "/world/fire", env: int = 0, max_flames: int = 4000) -> None:
