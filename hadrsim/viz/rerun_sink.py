@@ -139,13 +139,50 @@ def _log_footprints(path: str, footprints) -> None:
         )
 
 
-def _log_ground(path: str, terrain) -> None:
-    """The ground, seen from above: dark where nothing burns, green where much does."""
-    fuel = terrain.fuel.cpu().numpy().T          # (H, W) for image orientation
+def _log_ground(path: str, terrain, overlay: np.ndarray | None = None) -> None:
+    """The ground, as one textured quad lying in the world.
+
+    A quad rather than `rr.Image`, because an image logged into a 3D view floats as a
+    flat picture instead of being the floor.  It also means the fire can be painted
+    into the same texture: one image at cell resolution gives crisp, pixel-sharp burn
+    scars however large the map, where a sphere per burning cell gives neither.
+    """
+    img = overlay if overlay is not None else ground_image(terrain)
+    w_m, h_m = terrain.extent_m
+
+    rr.log(path, rr.Mesh3D(
+        vertex_positions=np.array([[0, 0, 0], [w_m, 0, 0], [w_m, h_m, 0], [0, h_m, 0]],
+                                  dtype=np.float32),
+        triangle_indices=np.array([[0, 1, 2], [0, 2, 3]], dtype=np.int32),
+        vertex_texcoords=np.array([[0, 0], [1, 0], [1, 1], [0, 1]], dtype=np.float32),
+        albedo_texture=img,
+    ))
+
+
+def ground_image(terrain, fire=None, env: int = 0) -> np.ndarray:
+    """The floor texture: what will burn, what is burning, and what already did.
+
+    Indexed [y, x] because that is how an image is laid out, while the simulation's
+    fields are [x, y] -- hence the transposes.
+    """
+    fuel = terrain.fuel.cpu().numpy().T
     hi = max(float(fuel.max()), 1e-6)
-    frac = (fuel / hi)[..., None]
-    img = (np.array(C_GROUND) + frac * (np.array(C_FUEL) - np.array(C_GROUND)))
-    rr.log(path, rr.Image(img.astype(np.uint8)))
+    img = (np.array(C_GROUND) + (fuel / hi)[..., None]
+           * (np.array(C_FUEL) - np.array(C_GROUND)))
+
+    if fire is not None:
+        burnt = fire.burnt[env].cpu().numpy().T
+        img[burnt] = C_BURNT_GROUND
+
+        heat = fire.intensity[env].cpu().numpy().T
+        alight = heat > 0
+        if alight.any():
+            # Hot cores go yellow-white, dying edges deep red, so the eye finds the
+            # front of the fire without being told where it is.
+            t = heat[alight][:, None]
+            img[alight] = C_FIRE_COOL + t * (C_FIRE_HOT - C_FIRE_COOL)
+
+    return img.clip(0, 255).astype(np.uint8)
 
 
 def _log_boxes(path, mask, bottom, top, cell, color) -> None:
@@ -168,8 +205,9 @@ def _log_boxes(path, mask, bottom, top, cell, color) -> None:
 
 C_FIRE_HOT = np.array([255, 214, 120])
 C_FIRE_COOL = np.array([200, 60, 24])
-C_BURNT = [46, 42, 44]
-C_HUMAN = [240, 236, 228]
+C_BURNT_GROUND = np.array([34, 28, 28])
+C_CALM = [225, 228, 235]
+C_PANIC = [235, 92, 58]
 C_SMOKE = [176, 176, 180]
 
 
@@ -177,31 +215,38 @@ def log_time(t_s: float) -> None:
     rr.set_time("sim_time", duration=float(t_s))
 
 
-def log_fire(fire, path: str = "/world/fire", env: int = 0) -> None:
-    """Burning cells, coloured by how fiercely, plus the scar left behind."""
+def log_fire(fire, path: str = "/world/fire", env: int = 0, max_flames: int = 4000) -> None:
+    """Fire, painted into the floor texture, with flames standing above the front.
+
+    The burn scar is a texture rather than a sphere per cell: at 1 m cells a real city
+    block has tens of thousands of burnt cells, and spheres for all of them are both
+    slow and unreadable.  A texture is one image at any map size, and it comes out
+    pixel-sharp, which is what fire on a grid should look like.
+
+    Flames are the exception -- fire has height, and a flat scar alone reads as paint.
+    Only the hottest cells get one, capped, so a city-wide fire stays drawable.
+    """
     cell = fire.terrain.cell_size_m
-    intensity = fire.intensity[env].cpu().numpy()
-    burning = intensity > 0
+    _log_ground("/world/terrain/ground", fire.terrain, ground_image(fire.terrain, fire, env))
 
-    xs, ys = np.nonzero(burning)
-    if len(xs):
-        i = intensity[xs, ys][:, None]
-        # Hot cores read yellow-white, dying edges red: the eye picks out the front.
-        colour = (C_FIRE_COOL + i * (C_FIRE_HOT - C_FIRE_COOL)).astype(np.uint8)
-        rr.log(f"{path}/flame", rr.Points3D(
-            positions=np.stack([(xs + 0.5) * cell, (ys + 0.5) * cell,
-                                np.full(len(xs), 0.3)], -1),
-            colors=colour, radii=cell * 0.45,
-        ))
-    else:
-        rr.log(f"{path}/flame", rr.Clear(recursive=False))
+    heat = fire.intensity[env].cpu().numpy()
+    xs, ys = np.nonzero(heat > 0.02)
+    if not len(xs):
+        rr.log(f"{path}/flame", rr.Clear(recursive=True))
+        return
 
-    xs, ys = np.nonzero(fire.burnt[env].cpu().numpy())
-    rr.log(f"{path}/burnt", rr.Points3D(
-        positions=np.stack([(xs + 0.5) * cell, (ys + 0.5) * cell,
-                            np.full(len(xs), 0.05)], -1),
-        colors=[C_BURNT], radii=cell * 0.4,
-    ) if len(xs) else rr.Clear(recursive=False))
+    v = heat[xs, ys]
+    if len(xs) > max_flames:                        # keep the fiercest
+        keep = np.argpartition(-v, max_flames)[:max_flames]
+        xs, ys, v = xs[keep], ys[keep], v[keep]
+
+    # Flame height tracks intensity, so the active front stands taller than the embers.
+    height = 0.4 + 2.2 * v
+    centres = np.stack([(xs + 0.5) * cell, (ys + 0.5) * cell, height / 2], -1)
+    halves = np.stack([np.full(len(xs), cell * 0.42), np.full(len(xs), cell * 0.42),
+                       height / 2], -1)
+    colour = (C_FIRE_COOL + v[:, None] * (C_FIRE_HOT - C_FIRE_COOL)).astype(np.uint8)
+    rr.log(f"{path}/flame", rr.Boxes3D(centers=centres, half_sizes=halves, colors=colour))
 
 
 def log_smoke(smoke, path: str = "/world/smoke", env: int = 0, floor: float = 0.02) -> None:
@@ -220,25 +265,53 @@ def log_smoke(smoke, path: str = "/world/smoke", env: int = 0, floor: float = 0.
         rr.log(path, rr.Clear(recursive=False))
         return
     v = np.clip(d[ks, xs, ys] / max(d.max(), 1e-6), 0, 1)
+    # Many small faint puffs read as a plume; a few big opaque ones read as bubbles.
+    # Higher, older smoke is thinner and wider, so radius grows and alpha falls.
     colour = np.concatenate([np.tile(C_SMOKE, (len(ks), 1)),
-                             (40 + 180 * v)[:, None]], -1).astype(np.uint8)
+                             (25 + 110 * v)[:, None]], -1).astype(np.uint8)
+    radii = cell * (0.35 + 0.10 * ks) * (0.5 + 0.5 * v)
     rr.log(path, rr.Points3D(
         positions=np.stack([(xs + 0.5) * cell, (ys + 0.5) * cell, alt[ks]], -1),
-        colors=colour, radii=cell * 0.8,
+        colors=colour, radii=radii,
     ))
 
 
 def log_human(human, path: str = "/world/human", env: int = 0) -> None:
-    """The person, coloured by how panicked, with a goal marker."""
-    p = human.pos[env].cpu().numpy()
-    g = human.goal[env].cpu().numpy()
-    panic = float(human.gamma[env])
-    # Calm reads pale, panicked reads hot -- so you can see the state without a plot.
-    colour = (np.array(C_HUMAN) * (1 - panic) + np.array([230, 90, 60]) * panic)
+    """The person, as a figure rather than a dot, facing the way they are walking.
 
-    rr.log(f"{path}/person", rr.Points3D(
-        positions=[[p[0], p[1], 0.9]], colors=[colour.astype(np.uint8)], radii=0.45))
-    rr.log(f"{path}/goal", rr.Points3D(
-        positions=[[g[0], g[1], 0.5]], colors=[[110, 210, 140]], radii=1.2))
+    A sphere is unreadable at city scale: you cannot tell it from a marker, and you
+    cannot tell which way it is going.  A 1.75 m figure with a head reads instantly
+    as a person, gives the scene its sense of scale, and costs four boxes.
+
+    Coloured by panic -- pale and calm through to hot and frantic -- so their state is
+    visible in the scene itself rather than only on a plot.
+    """
+    p3 = human.pos[env].cpu().numpy()
+    goal = human.goal[env].cpu().numpy()
+    panic = float(human.gamma[env])
+    vel = human.vel[env].cpu().numpy()
+
+    body = (np.array(C_CALM) * (1 - panic) + np.array(C_PANIC) * panic)
+    speed = float(np.linalg.norm(vel))
+    heading = vel / speed if speed > 1e-3 else np.array([1.0, 0.0])
+
+    # torso, head, and a stub in front so the direction of travel is obvious
+    nose = p3 + heading * 0.35
+    centres = np.array([
+        [p3[0], p3[1], 0.70],
+        [p3[0], p3[1], 1.58],
+        [nose[0], nose[1], 1.00],
+    ])
+    halves = np.array([
+        [0.22, 0.22, 0.55],
+        [0.13, 0.13, 0.16],
+        [0.08, 0.08, 0.08],
+    ])
+    colours = np.array([body, body * 0.92, body * 0.7]).clip(0, 255).astype(np.uint8)
+    rr.log(f"{path}/person", rr.Boxes3D(centers=centres, half_sizes=halves, colors=colours))
+
+    rr.log(f"{path}/goal", rr.Boxes3D(
+        centers=[[goal[0], goal[1], 1.0]], half_sizes=[[0.9, 0.9, 1.0]],
+        colors=[[90, 200, 130]]))
     rr.log(f"{path}/panic", rr.Scalars(panic))
-    rr.log(f"{path}/speed", rr.Scalars(float(human.vel[env].norm())))
+    rr.log(f"{path}/speed", rr.Scalars(speed))
