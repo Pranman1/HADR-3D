@@ -1,0 +1,19 @@
+[project]
+name = "hadrsim"
+version = "0.0.1"
+description = "3D continuous-time simulator for UAV-assisted fire evacuation"
+requires-python = ">=3.10"
+dependencies = ["torch", "numpy", "pyyaml", "rerun-sdk"]
+
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+include = ["hadrsim*"]
+
+[tool.pytest.ini_options]
+# The box has ROS 2 Humble on the path and its pytest plugins break collection.
+# We want ROS available for the running environment, just not inside unit tests.
+addopts = "-p no:cacheprovider"
+testpaths = ["tests"]
