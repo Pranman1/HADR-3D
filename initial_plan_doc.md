@@ -26,7 +26,10 @@ section 11 says exactly how we check that.
 | **ROS 2** | the standard messaging system real robots use to talk to each other |
 | **PPO** | the reinforcement-learning algorithm that trains the policy. Same one the paper used |
 | **PX4** | the open-source autopilot software that runs on real research drones |
-| **SITL** | software-in-the-loop. Running real PX4 code against a simulator instead of a real drone |
+| **SITL** | software-in-the-loop. Running real PX4 firmware against a simulator instead of a real drone |
+| **EKF2** | PX4's state estimator. Works out where the drone actually is from noisy sensors |
+| **uXRCE-DDS** | the link PX4 uses to talk to ROS 2. The real one, on real hardware |
+| **`.ulg`** | the log file PX4 writes on every real flight |
 | **setpoint** | a command telling the autopilot what to achieve, e.g. "fly at 3 m/s forward" |
 | **LLR / HLR** | low-level rescuer (flies low, can actually reach the person) / high-level rescuer (flies high, sees wide, cannot intercept) |
 
@@ -358,6 +361,33 @@ Three details, each fixing a specific defect from section 2:
   written as `nn.Linear(64*13*13, ...)`. Centred and fixed-size means map size never
   touches the network.
 
+#### Where each channel of that picture comes from
+
+Easy to miss, and it is the same oracle hole as human detection wearing a different
+hat: the fire channel must not be handed to the drones for free.  Ground truth fire
+is legitimate for deciding *where the person runs* -- that is just how the simulator
+works -- but the moment a drone reads it, the policy is planning around a fire map it
+never had to find.
+
+| Channel | Where it comes from | Honest? |
+|---|---|---|
+| **buildings** | known in advance, from the map | ✅ yes. A real deployment has building footprints -- we get ours from OSM. Nothing to earn |
+| **fire** | seen within line of sight; otherwise a coarse, stale shared map | must be **observed**, not given |
+| **smoke** | same as fire | must be **observed** |
+| **where it has looked** | the drone's own memory | ✅ yes, it is its own |
+
+**Fire does not need its own detector**, and this is the one place where an oracle
+stays defensible after being made honest.  A person at 60 m is 1.7 m of low-contrast
+texture; a fire is a large, bright, hot thing with a smoke column above it.  So
+modelling fire as *reliably detected inside the sensor footprint and absent outside
+it* is a fair description of reality, where the same claim about a person is not.
+
+Fire beyond line of sight arrives the same way a real incident commander gets it: a
+shared map from other aircraft, ground crews or satellite, which is **coarse and out
+of date**.  That is exactly what the `comms` layer already models, so it costs nothing
+new -- and it turns "where is the fire" from free knowledge into something the team
+has to go and look at, which is the same problem the paper poses about the person.
+
 ### The rule that closes the oracle loophole
 
 > **The scoring may only read what the policy reads.**
@@ -400,6 +430,7 @@ decentralized. Gaby's `Team` and `SPPO` pieces are the existing hooks.
 
 - One copy, real time, on screen, looks good.
 - Each drone is a separate ROS 2 node sending real messages, like real robots.
+- **Flown by real PX4 firmware in SITL** (§8.2b), not by our approximation of it.
 - Loads the exact same trained network file.
 
 ### The test that keeps them honest
@@ -445,10 +476,76 @@ body rate setpoint →  PID
                    →  mixer  →  four motor commands
 ```
 
-Then what we train against is what actually flies, and we can later check ourselves
-against real PX4 in SITL. The Lee/Mellinger geometric controller ships as a second option
-— cleaner, ~80 lines, more citable — but PX4 is the default because PX4 is the one that
-is real.
+We implement that cascade with PX4's default gains **for training**, because training
+needs thousands of drones stepping in parallel and PX4 cannot do that.
+
+**For evaluation we do not imitate PX4 — we run it.** See 8.2b. The Lee/Mellinger
+geometric controller ships as a third option: cleaner, ~80 lines, more citable.
+
+### 8.2b Running real PX4 in the running environment
+
+**SITL** ("software in the loop") is PX4's own firmware, unmodified, running as a
+program on a PC instead of on a flight controller board. It is how PX4 itself is
+tested, and every serious drone simulator connects to it.
+
+The usual setup pairs PX4 SITL with Gazebo, which supplies the physics. That is not
+what we want — our world *is* the point, and Gazebo has no fire in it. PX4 exposes a
+documented **simulator interface** for exactly this case: it hands out actuator
+commands and expects sensor readings back, in lockstep. So:
+
+```
+   POLICY  ──velocity setpoint──►  PX4 firmware (real, unmodified)
+                                          │  motor commands
+                                          ▼
+                                    OUR simulator
+                                    quadrotor physics · city · fire · smoke
+                                          │  simulated IMU, GPS, barometer
+                                          └──────────────► back to PX4
+```
+
+**PX4 does the flying. We do the world.**
+
+**Why this beats matching PX4's numbers**
+
+- It *is* the autopilot, so there is nothing left to validate about the controller.
+- We inherit PX4's **EKF2 state estimator**, which closes the one sim-to-real hole
+  section 14 admits to. The drone stops being handed its own exact position and starts
+  estimating it from noisy simulated sensors, drift and all, as a real drone does.
+- We inherit its failsafes, arming logic and mode transitions — the unglamorous
+  behaviour that decides whether a policy survives contact with hardware.
+- The ROS 2 link is already the real one: PX4 talks to ROS 2 over uXRCE-DDS, which is
+  what a real X500 uses.
+
+**Why it cannot be the training environment**
+
+SITL runs one aircraft at roughly real time. Training needs thousands stepping far
+faster than real time. So the split is exactly the one we already have:
+
+| | Drone flown by | Speed |
+|---|---|---|
+| **Training environment** | our own cascade, batched on GPU | thousands, far faster than real time |
+| **Running environment** | **real PX4 SITL** | one, real time |
+
+Not a compromise — the two-runtime design paying off. It also makes the parity test in
+section 7 much stronger: it now compares our fast approximation against real autopilot
+firmware, so a divergence is a finding rather than a broken test.
+
+### 8.2c How we know the physics is right
+
+Five rungs, honestly labelled. Only the last two touch reality.
+
+| Rung | What it checks | Cost |
+|---|---|---|
+| 1. Internal sanity | hover thrust equals weight, no drift on zero command, energy behaves | free |
+| 2. Published spec | our X500 hovers at the right throttle, hits the right top speed and climb rate | cheap |
+| 3. Against PX4 SITL | our fast model's step response matches real firmware | a day, automatable |
+| 4. **Against real flight logs** | replay a real drone's commands through our model, compare | cheap *if a log exists* |
+| 5. Actual flight | reality | far future |
+
+**Rung 4 is worth chasing early.** PX4 writes a `.ulg` log on every flight. If the group
+has any log from an X500 or similar flying velocity setpoints, replaying it through our
+model is an afternoon's work — and it is the only cheap evidence that any of this
+resembles a real aircraft. **Ask Gaby whether such logs exist.**
 
 ### 8.3 What the policy outputs, and why
 
@@ -574,26 +671,56 @@ and the smoke are 3D.
 
 ---
 
-## 10. Where the CNN goes
+## 10. The CNN
 
-Three options. They stack; they are not alternatives.
+**There is one CNN worth the name: the detector.** An earlier draft of this document
+counted two, which made a hyperparameter look like a research component. Correcting
+that.
 
-| | What the network sees | Needs a renderer? | Speed | Verdict |
-|---|---|---|---|---|
-| **A. Local picture + CNN** | a small map centred on the drone — buildings, fire, smoke, sightings | no | full | **do this** |
-| **B. Offline detector** | sightings produced by a CNN trained separately on rendered images | offline only | full | **then this** |
-| **C. Raw camera in the loop** | actual camera images, every step | yes, constantly | ~100× slower | only as a scoped experiment |
+### What the detector does
 
-**A is a real CNN with no rendering.** Sanika's `fire-encoding` branch already prototyped
-exactly this (`FOVCNNModule`, Conv2d 1→16→32 ahead of the LSTM), though it was never
-validated and hardcodes a 5×5 view in three places.
+One job: **is there a person, where, and how sure are we.** Nothing else.
 
-**B is real vision without paying for it during training.** Render offline, train a
-detector, freeze it, let it produce sightings. Perception and control train separately.
+Range comes from two cues, both free once you have a box around the person:
 
-**Standing rule: raw camera images never enter the training loop.** This is the single
-decision that makes the project finishable. Option C stays architecturally possible but is
-not planned.
+- **Box height.** Known human height ÷ box height in pixels × focal length. Always
+  available. Degrades badly under partial occlusion: if the legs are hidden the box is
+  short, so the person is reported further away than they are.
+- **Where the feet meet the ground.** With the camera's pose known, the ray through the
+  feet pixel meets the ground plane at exactly one point. **More accurate than box
+  height** whenever the feet are visible.
+
+**Their disagreement is the confidence signal, and it costs nothing.** Agreeing means
+a clean sighting; disagreeing means the person is probably half-hidden, so report low
+confidence and let the policy decide whether to go and look properly. That is exactly
+the `confidence` field the contract already carries.
+
+This is also why the observation carries **pitch and roll**: the ground-plane cue needs
+to know where the camera is pointing, and a real quadrotor tilts to move.
+
+*Open, one line:* should the detector also spot fire visually? Section 6 argues no —
+fire inside line of sight is reliably detectable without learning anything, and adding
+it is scope. Default is no.
+
+### The other thing I previously called a CNN
+
+The policy also reads a small map centred on the drone. Whether that map is encoded by
+a few convolutions or flattened into an MLP is an **encoder choice — a hyperparameter,
+not a perception system.** It is not a milestone and it does not need its own name.
+(Sanika's `fire-encoding` branch prototyped exactly this, never validated, with a 5×5
+view hardcoded in three places.)
+
+### What stays ruled out
+
+| | | Verdict |
+|---|---|---|
+| **Detector, trained offline and frozen** | camera in → sightings out | **this is the plan** |
+| Map encoder inside the policy | convolutions vs MLP | implementation detail |
+| **Raw camera frames every step of every environment** | ~100× slower | **never** |
+
+**Standing rule: raw camera frames never enter the training loop.** The detector is
+trained separately, on rendered images, then frozen — so real vision costs nothing at
+training time. This single decision is what makes the project finishable.
 
 ---
 
@@ -711,7 +838,9 @@ Every deliberate difference, why, and what it costs. This is the table to hand G
 | 14 | one network flying both drones | one network now, structured for two later | real drones are separate machines | none now |
 | 15 | observation hardcoded to 25×25 in four places | drone-centred, fixed-size, map-size independent | map size should never touch the network | — |
 | 16 | one runtime | training environment and running environment, plus a parity test | you cannot demo the fast one or train in the ROS one | the parity test |
-| 17 | no CNN on the live path | CNN over a drone-centred picture, then a frozen detector | the paper's CNN code raises `NotImplementedError` | §10 |
+| 17 | no CNN on the live path | a frozen detector: camera in, sightings out | the paper's CNN code raises `NotImplementedError` | §10 |
+| 18 | the drones are handed a perfect fire map | fire is seen within line of sight; beyond it, a coarse and stale shared map | otherwise the policy plans around a fire it never had to find — the same oracle hole as the person, in a different hat | one more thing to observe |
+| 19 | evaluation uses the same hand-written dynamics as training | evaluation runs **real PX4 firmware** in SITL, flying our world | there is then nothing left to validate about the controller, and EKF2 supplies real state estimation | SITL is real-time and single-aircraft |
 
 ### Explicitly not changed
 
@@ -746,9 +875,12 @@ be closed, each costing nothing to leave open today.
   gets calibrated against measured link statistics.
 - **Delay.** The clock separates simulation step from control rate, so real sense-to-act
   delay is a parameter both environments already honour.
-- **Knowing where you are.** The one real hole: the simulator gives each drone its exact
-  position. Real drones drift. Deliberately stubbed — the seam is a `StateEstimator`
-  between `agents/` and `sensing/`, added when it matters.
+- **Knowing where you are.** ~~The one real hole.~~ **Closed by the PX4 SITL decision**
+  (§8.2b). Running real firmware means running its EKF2 state estimator, so in the
+  running environment the drone estimates its own position from noisy simulated
+  sensors, drift and all, instead of being handed the truth. The training environment
+  still hands it over — that gap is now a measurable difference between the two
+  runtimes rather than an unknown.
 
 ---
 
@@ -761,7 +893,10 @@ be closed, each costing nothing to leave open today.
 | Timing | 100 Hz physics, policy decides at 2 Hz, 120 s episodes |
 | Networks | One now, observations built per-drone so a second drops in later |
 | Airframe | Holybro X500 V2, real published parameters. Crazyflie as a cross-check |
-| Autopilot | PX4 cascade with PX4 default gains. Lee/Mellinger geometric as a second option |
+| Autopilot (training) | PX4 cascade with PX4 default gains, ours, batched on GPU |
+| Autopilot (evaluation) | **real PX4 SITL**, flying our world over PX4's simulator interface |
+| Fire in the observation | observed within line of sight; a coarse stale shared map beyond it. Never handed over |
+| CNN | **one** — the detector. Person present, where, how sure. The policy's map encoder is a hyperparameter, not a milestone |
 | Policy output | Velocity + turn rate — the native PX4 offboard setpoint |
 | Fidelity | Train at `point_mass` with derived camera tilt, evaluate at `quadrotor`, report the gap |
 | Person | Trivedi & Rao decision layer, social force motion layer, γ driven by fire and smoke |
@@ -785,10 +920,34 @@ be closed, each costing nothing to leave open today.
 
 ## 16. Immediate next steps
 
-1. Write `core/spec.py` and `scenarios/paper_parity.yaml` **first** — the contract and one
-   concrete scenario, before any simulation code. Everything else is written against them.
-2. Recover the 2D baseline at `f9ee959`, so step 7 has a reference worth trusting.
-3. Step 1: world alone.
+**Done:** `core/spec.py`, `scenarios/paper_parity.yaml`, `world/terrain.py`,
+`world/raster.py`, `world/osm.py`, `viz/rerun_sink.py`, `viz/mesh.py`, `viz/facade.py`.
+679 code lines, 54 tests.
+
+**Next, in order:**
+
+1. **Amend `core/spec.py`** for the fire-provenance rule in §6 — the raster's channels
+   need to record where each one legitimately comes from, so no later code can quietly
+   read ground-truth fire.
+2. **`world/fire.py`** — spread with fuel, moisture, burnout and wind. Watchable in the
+   viewer from the first commit.
+3. **`world/smoke.py`** and **`world/wind.py`** — the plume that occludes the high
+   drone, derived from the fire.
+4. **`agents/human.py`** and **`agents/crowd.py`** — Trivedi & Rao on top, social force
+   underneath. Ends step 1: the world alone, no drones.
+5. Then step 2: `agents/airframes.py`, `agents/drone.py`, `agents/autopilot.py`,
+   `envs/train.py`, `policy/ppo.py`.
+
+**To ask Gaby, in one message:**
+
+- Does the group have any **PX4 flight logs** (`.ulg`) from an X500 or similar? Rung 4
+  of §8.2c is an afternoon's work if so, and it is the only cheap evidence any of this
+  resembles a real aircraft.
+- Confirm the timing change: 100 Hz physics, 2 Hz decisions, 120 s episodes. It changes
+  what "one step" means relative to the paper.
+- Is `main-clean-merge` the branch behind Table I, and is `f9ee959` where the published
+  numbers live? (§12 says HEAD does not reproduce them.)
+- The 2× vs 3× panic discrepancy, still open from the website work.
 
 ---
 
