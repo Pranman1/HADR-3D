@@ -5,16 +5,22 @@ sub-moves and 1 fire tick, capped at 100 steps.  That is fine on a grid and
 meaningless in continuous time, so here each rate is stated in Hz and everything
 else is derived.
 
-Three rates, not one:
+Four rates, not one:
 
-    physics   100 Hz   the drone's equations of motion
-    control     2 Hz   how often the policy gets to decide
+    physics   100 Hz   bodies move: integration of the equations of motion
+    human      10 Hz   how often the person reconsiders where to go
+    control     2 Hz   how often the *policy* gets to decide
     fire        1 Hz   how often the fire tries to spread
 
 They are separate because they are separate in reality: a real drone's autopilot
-runs far faster than any planner above it, and a fire does not care about either.
-Keeping them apart is also what lets the running environment honour a real
-sense-to-act delay without the training environment having to model one.
+runs far faster than any planner above it, a person re-aims several times a second
+without replanning their route, and a fire cares about none of it.
+
+**Deciding slowly is not the same as moving slowly.**  The policy choosing twice a
+second does not mean anything jumps twice a second -- between decisions, bodies keep
+integrating at 100 Hz under the last command they were given.  That is what makes
+the motion continuous rather than a sequence of teleports, and it is why anything
+that steps the world at the control rate alone looks, and is, wrong.
 """
 
 from __future__ import annotations
@@ -25,9 +31,11 @@ from dataclasses import dataclass
 @dataclass(frozen=True)
 class Clock:
     physics_hz: float = 100.0
+    human_hz: float = 10.0
     control_hz: float = 2.0
     fire_hz: float = 1.0
     episode_seconds: float = 120.0
+    viz_hz: float = 20.0        # how often a watcher gets a frame
 
     def __post_init__(self):
         if self.physics_hz < self.control_hz:
@@ -49,6 +57,16 @@ class Clock:
         return max(1, round(self.physics_hz / self.control_hz))
 
     @property
+    def human_substeps(self) -> int:
+        """Physics steps between one decision by the person and the next. 10."""
+        return max(1, round(self.physics_hz / self.human_hz))
+
+    @property
+    def viz_substeps(self) -> int:
+        """Physics steps per drawn frame. 5, i.e. 20 frames a second."""
+        return max(1, round(self.physics_hz / self.viz_hz))
+
+    @property
     def max_steps(self) -> int:
         """Policy decisions in one episode. 240, at the default rates.
 
@@ -59,7 +77,8 @@ class Clock:
 
     def describe(self) -> str:
         return (
-            f"{self.physics_hz:g} Hz physics, {self.control_hz:g} Hz control "
-            f"({self.substeps} substeps), {self.fire_hz:g} Hz fire, "
-            f"{self.episode_seconds:g} s = {self.max_steps} decisions"
+            f"{self.physics_hz:g} Hz physics, {self.human_hz:g} Hz human, "
+            f"{self.control_hz:g} Hz control ({self.substeps} substeps), "
+            f"{self.fire_hz:g} Hz fire, {self.episode_seconds:g} s "
+            f"= {self.max_steps} decisions"
         )

@@ -111,7 +111,7 @@ class Fire:
 
     # ------------------------------------------------------------------ setup
 
-    def reset(self, ignite_xy: torch.Tensor | None = None) -> None:
+    def reset(self, ignite_xy: torch.Tensor | None = None, radius_m: float = 2.5) -> None:
         """Put the fire back to unburnt, then light it at the given cells.
 
         `ignite_xy` is (B, 2) integer cell coordinates, one ignition per environment.
@@ -121,14 +121,29 @@ class Fire:
         self._elapsed = 0.0
         self._ticks = 0
         if ignite_xy is not None:
-            self.ignite(ignite_xy)
+            self.ignite(ignite_xy, radius_m)
 
-    def ignite(self, xy: torch.Tensor) -> None:
-        """Light cells. Ignoring any that have nothing to burn -- a road will not take."""
+    def ignite(self, xy: torch.Tensor, radius_m: float = 0.0) -> None:
+        """Light a patch. Cells with nothing to burn are skipped -- a road will not take.
+
+        A patch rather than a point, because a single square metre is a fragile thing
+        to start from: it burns out in a few seconds having had only a handful of
+        chances to catch, so whether the fire happens at all comes down to a coin
+        toss.  A real fire is not noticed until it is already several metres across,
+        which is both more realistic and far less capricious.
+        """
         b = torch.arange(len(xy), device=self.device)
         x, y = xy[:, 0].long(), xy[:, 1].long()
-        ok = self.fuel[b, x, y] > 0
-        self.state[b[ok], x[ok], y[ok]] = BURNING
+
+        r = int(radius_m / self.terrain.cell_size_m)
+        w, h = self.state.shape[-2:]
+        for dx in range(-r, r + 1):
+            for dy in range(-r, r + 1):
+                if dx * dx + dy * dy > r * r:
+                    continue
+                px, py = (x + dx).clamp(0, w - 1), (y + dy).clamp(0, h - 1)
+                ok = self.fuel[b, px, py] > 0
+                self.state[b[ok], px[ok], py[ok]] = BURNING
 
     # ------------------------------------------------------------------- step
 

@@ -32,8 +32,20 @@ only difference between `evader-accessible` (roof at 2.5 m -- a person fits, a d
 at 3 m does not) and `accessible` (roof at 4 m -- the drone fits too).  So `flyable`
 is derived from clearance in load(), never hardcoded.
 
-Fuel is 1.0 wherever the ground is open (including under canopies) and 0.0 under
-solid buildings, which is what stops fire spreading through walls.
+**Buildings burn.**  Giving them zero fuel looks like the right way to stop
+`firegrid`'s fire walking through walls, and it is badly wrong: a building is the
+single largest thing on the block that is going to burn.  Downtown Berkeley is 44%
+building and most of the rest is pavement, so with fireproof buildings a fire there
+cannot spread at all -- which is not a quirk of the demo, it is the model saying a
+city cannot have a fire.
+
+What actually stops an urban fire is the *street*.  So streets carry no fuel and
+buildings carry more of it than open ground, and `firegrid`'s real defect -- that
+its fire ignores geometry entirely, because it has no notion of fuel at all --
+stays fixed.
+
+`burnable_buildings=False` restores the fireproof version for `paper_parity`, where
+the point is to reproduce the paper rather than to be right.
 """
 
 from __future__ import annotations
@@ -45,6 +57,8 @@ import torch
 import yaml
 
 # height (m) of the solid part, and (bottom, top) of the canopy slab. 0 means absent.
+FUEL_BUILDING = 1.4    # a building is more to burn than a patch of grass
+FUEL_OPEN = 1.0
 SOLID_H = 8.0
 CANOPY_LOW = (2.5, 3.0)    # a person fits under; a drone at 3 m does not
 CANOPY_HIGH = (4.0, 4.5)   # the low drone fits under too
@@ -123,6 +137,7 @@ def load(
     path: str | Path,
     cell_size_m: float = 1.0,
     llr_clearance_m: float = LLR_CLEARANCE_M,
+    burnable_buildings: bool = True,
     device="cpu",
 ) -> Terrain:
     """Read a pegrid-format map yaml into a 3D Terrain."""
@@ -132,7 +147,7 @@ def load(
     z = lambda v=0.0: torch.full((w, h), v, dtype=torch.float32, device=device)
     b = lambda v: torch.full((w, h), v, dtype=torch.bool, device=device)
 
-    t = Terrain(z(), z(), z(), b(True), b(True), z(1.0), cell_size_m)
+    t = Terrain(z(), z(), z(), b(True), b(True), z(FUEL_OPEN), cell_size_m)
 
     for name, (solid, canopy, walkable) in CLASSES.items():
         for corners in spec["buildings"].get(name, []):
@@ -146,7 +161,7 @@ def load(
                 t.canopy_z0[sl], t.canopy_z1[sl] = canopy
             t.walkable[sl] = walkable
             if solid > 0.0:
-                t.fuel[sl] = 0.0   # fire cannot cross a solid building
+                t.fuel[sl] = FUEL_BUILDING if burnable_buildings else 0.0
 
     t.derive_flyable(llr_clearance_m)
     return t

@@ -115,10 +115,26 @@ def test_fire_will_not_light_where_there_is_nothing_to_burn():
     assert int(f.burning.sum()) == 0
 
 
-def test_fire_respects_real_buildings():
+def test_buildings_burn_hardest():
+    """Not "fire respects buildings" -- buildings are what an urban fire consumes.
+
+    The barrier in a city is the *street*.  Making buildings fireproof is a tempting
+    way to stop fire walking through walls, and it means downtown Berkeley -- 44%
+    building, most of the rest pavement -- cannot burn at all.
+    """
     t = terr.load("maps/rust25.yaml")
+    assert bool((t.fuel[t.solid_top > 0] > t.fuel[t.solid_top == 0].max() * 0.99).all())
     f = burn(t, 300, wind_mod.still(1), at=(5, 18))
-    assert not bool((f.burning | f.burnt)[0][t.solid_top > 0].any())
+    assert bool((f.burning | f.burnt)[0][t.solid_top > 0].any()), "buildings must burn"
+
+
+def test_a_single_cell_ignition_is_not_a_coin_toss():
+    """One square metre burns out in seconds having had few chances to catch, so
+    whether a fire happens at all comes down to luck.  A real fire is not noticed
+    until it is already several metres across."""
+    outcomes = [int(burn(OpenField(41), 60, wind_mod.still(1), seed=s,
+                         at=(20, 20)).burnt.sum()) for s in range(6)]
+    assert all(o > 20 for o in outcomes), f"fire fizzled on some seeds: {outcomes}"
 
 
 @pytest.mark.parametrize("bearing,axis,sign", [

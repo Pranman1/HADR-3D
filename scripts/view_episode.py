@@ -9,6 +9,12 @@ to the published 25 x 25 grid, which exists only for comparing against Table I.
     python scripts/view_episode.py --osm "Financial District, San Francisco" --web
     python scripts/view_episode.py --wind 8 --bearing 45 --web
     python scripts/view_episode.py --paper --web
+
+**Where things get placed is this script's business, not the paper's.**  The paper
+hand-picks 40 origin/destination pairs and 4 fire origins on one 25 m block, and
+`scenarios/paper_parity.yaml` holds exactly those.  Dropping the same scenario
+anywhere on Earth means choosing them automatically, and the rules below are a demo
+convenience -- they are not part of the model and no result should depend on them.
 """
 
 import argparse
@@ -36,19 +42,27 @@ p.add_argument("--map", default="maps/rust25.yaml")
 p.add_argument("--radius", type=float, default=180.0)
 p.add_argument("--cell", type=float, default=1.0)
 p.add_argument("--wind", type=float, default=0.0, help="wind speed, m/s")
-p.add_argument("--bearing", type=float, default=45.0, help="degrees, direction blown towards")
+p.add_argument("--bearing", type=float, default=45.0, help="degrees, blown towards")
 p.add_argument("--seed", type=int, default=0)
 p.add_argument("--web", action="store_true")
 p.add_argument("--save", default=None)
-p.add_argument("--speed", type=float, default=2.0,
-               help="playback speed once the episode is recorded")
+p.add_argument("--speed", type=float, default=2.0, help="playback speed")
 p.add_argument("--paused", action="store_true", help="do not auto-play")
 a = p.parse_args()
 
 t = terr.load(a.map, cell_size_m=a.cell) if a.paper \
     else osm.load(place=a.osm, radius_m=a.radius, cell_size_m=a.cell)
 clock = Clock()
+
+# One stream each. Sharing a generator makes the fire's spread depend on how many
+# times the wind happened to be stepped -- so raising the physics rate, or adding a
+# gust, silently changes which cells ignite. It is exactly the class of bug that
+# makes a "reproducible" simulator irreproducible in practice, and it showed up here
+# as fires that mysteriously went out.
 rng = Rng(a.seed)
+rng_fire = rng.fork("fire")
+rng_wind = rng.fork("wind")
+rng_human = rng.fork("human")
 
 fire = fire_mod.Fire(t, batch=1)
 smoke = smoke_mod.Smoke(t, batch=1)
@@ -56,83 +70,110 @@ wind = wind_mod.still(1) if a.wind == 0 else wind_mod.make(1, a.wind, a.bearing)
 human = Human(t, batch=1)
 crowd = Crowd(t)
 
-# Choosing a start, a goal and an ignition point that actually make an episode.
-# On the paper's 25 m block anything works; on a real city it does not, and both of
-# the obvious choices fail:
-#   - opposite corners of a 360 m map is a 500 m walk, which nobody finishes in 120 s
-#   - a burnable cell picked at random is often an isolated scrap of front garden
-#     surrounded by road, so the fire burns it and goes out
+# --------------------------------------------------------------- placing things
 cell = t.cell_size_m
 walk = t.walkable.nonzero()
-start_cell = walk[(walk[:, 0] + walk[:, 1]).argmin()]
-start = start_cell.float() * cell
 
-# Goal: as far as the person could plausibly walk in the time available, measured
-# along the streets rather than through the buildings.
-reach = nav.distance_field(t.walkable, start_cell[None], cell)[0]
-budget = 0.55 * Human(t, 1).p.v_calm * clock.episode_seconds
-ok = t.walkable & (reach < nav.UNREACHABLE / 2)
-goal_cell = ok.nonzero()[(reach[ok] - budget).abs().argmin()]
-goal = goal_cell.float() * cell
+# The start goes a quarter of the way into the map, not in a corner.  A corner route
+# on a real extract runs along the edge where the map has been clipped, so there is
+# little contiguous fuel beside it and the fire fizzles -- and you never see the city.
+w, h = t.shape
+target = torch.tensor([w * 0.28, h * 0.28])
+start_cell = walk[(walk.float() - target).norm(dim=1).argmin()]
 
-# Ignition: near the midpoint of that route, and somewhere with enough around it to
-# burn.  Fuel density over a 15 m window is what separates a city block from a verge.
-mid = (start_cell + goal_cell).float() / 2
-dense = torch.nn.functional.avg_pool2d(
-    (t.fuel > 0).float()[None, None], 15, 1, 7)[0, 0]
-candidates = ((t.fuel > 0) & (dense > 0.5)).nonzero().float()
-if not len(candidates):
-    candidates = (t.fuel > 0).nonzero().float()
-ignite = candidates[(candidates - mid).norm(dim=1).argmin()].long()
+# The exit: as far as the person could plausibly walk in the time available,
+# measured along the streets rather than straight through the buildings.  Opposite
+# corners of a 360 m map is a 500 m walk that nobody finishes in 120 s.
+from_start = nav.distance_field(t.walkable, start_cell[None], cell)[0]
+reachable = t.walkable & (from_start < nav.UNREACHABLE / 2)
+budget = 0.55 * human.p.v_calm * clock.episode_seconds
+goal_cell = reachable.nonzero()[(from_start[reachable] - budget).abs().argmin()]
+route_m = float(from_start[goal_cell[0], goal_cell[1]])
+
+# The fire: on the route, but well clear of both ends of it.  Lighting it beside the
+# exit makes an incoherent scenario -- the safe place is inside the fire -- and
+# lighting it beside the start gives the person no chance.  It also needs enough
+# around it to burn: a lone scrap of front garden ringed by road burns out in
+# twenty seconds.
+from_goal = nav.distance_field(t.walkable, goal_cell[None], cell)[0]
+# Mean fuel *load* over a 15 m window, not the fraction of cells with any fuel at
+# all: once a road carries street trees and parked cars its fuel is nonzero, so
+# "fraction burnable" became 1.0 everywhere and stopped selecting for anything.
+density = torch.nn.functional.avg_pool2d(t.fuel[None, None], 15, 1, 7)[0, 0]
+
+on_route = (from_start + from_goal) < route_m * 1.35
+clear_of_ends = (from_start > 0.3 * route_m) & (from_goal > 0.3 * route_m)
+heavy = t.fuel > 0.6                          # not a street, not bare ground
+good = heavy & (density > 0.9) & on_route & clear_of_ends
+for fallback in (heavy & on_route & clear_of_ends, heavy & on_route, t.fuel > 0):
+    if bool(good.any()):
+        break
+    good = fallback
+ignite = good.nonzero()[(from_start[good] - route_m / 2).abs().argmin()]
 
 fire.reset(ignite[None])
-human.reset(start[None], goal[None])
+human.reset(start_cell.float()[None] * cell, goal_cell.float()[None] * cell)
 
 print(f"\n{a.map if a.paper else a.osm}  {t.shape[0]}x{t.shape[1]} @ {cell} m")
 print(clock.describe())
-print(f"person {start.tolist()} -> {goal.tolist()} "
-      f"({float(reach[goal_cell[0], goal_cell[1]]):.0f} m on foot), fire at {ignite.tolist()}")
+print(f"person walks {route_m:.0f} m: {start_cell.tolist()} -> {goal_cell.tolist()}")
+print(f"fire at {ignite.tolist()}  "
+      f"({float(from_start[ignite[0], ignite[1]]):.0f} m along the route, "
+      f"{float(from_goal[ignite[0], ignite[1]]):.0f} m from the exit)")
 print(f"wind {a.wind} m/s towards {a.bearing} deg\n")
 
-viz.start("hadrsim-episode", web=a.web, save=a.save,
-          play=not a.paused, speed=a.speed)
+# ------------------------------------------------------------------- the episode
+viz.start("hadrsim-episode", web=a.web, save=a.save, play=not a.paused, speed=a.speed)
 viz.log_terrain(t)
 
-dt = clock.control_dt
-steps_logged = 0
+dt = clock.dt                       # 0.01 s -- bodies move at 100 Hz
+want = torch.zeros(1, 2)
 arrived_at = None
-for step in range(clock.max_steps):
-    steps_logged += 1
-    now = step * dt
-    wind.step(dt, rng)
-    fire.step(dt, wind, rng)
-    smoke.update(fire, wind)
-    want = human.desired_velocity(fire, smoke, rng, dt)
+frames = 0
+half_second = max(1, int(clock.physics_hz / 2))
+
+for tick in range(int(clock.episode_seconds * clock.physics_hz)):
+    now = tick * dt
+
+    # Each thing on its own clock.  The person re-aims ten times a second; their body
+    # integrates a hundred times a second; the fire spreads once.  Nothing teleports
+    # between decisions -- that is the whole point of continuous time, and it is what
+    # the drones will do too, deciding at 2 Hz while flying at 100 Hz.
+    if tick % clock.human_substeps == 0:
+        want = human.desired_velocity(fire, smoke, rng_human, clock.human_substeps * dt)
     human.integrate(crowd.step(human.pos, human.vel, want, dt), dt)
 
-    viz.log_time(now)
-    viz.log_fire(fire)
-    viz.log_smoke(smoke)
-    viz.log_human(human)
+    wind.step(dt, rng_wind)
+    fire.step(dt, wind, rng_fire)
 
-    if step % 40 == 0:
-        print(f"  t={now:6.1f}s  burning {int(fire.burning[0].sum()):>5}  "
-              f"panic {float(human.gamma[0]):.2f}  "
-              f"speed {float(human.vel[0].norm()):.2f} m/s"
-              f"{'   REACHED' if human.reached[0] else ''}")
+    if tick % clock.viz_substeps == 0:
+        viz.log_time(now)
+        viz.log_human(human)
+        frames += 1
+    if tick % half_second == 0:
+        # Fire and smoke change slowly, and the ground texture is by far the most
+        # expensive thing logged, so they get 2 Hz while the person gets 20.
+        smoke.update(fire, wind)
+        viz.log_time(now)
+        viz.log_fire(fire)
+        viz.log_smoke(smoke)
+
     if human.reached[0] and arrived_at is None:
         arrived_at = now
         print(f"  t={now:6.1f}s  REACHED SAFETY")
+    if tick % int(clock.physics_hz * 20) == 0:
+        print(f"  t={now:6.1f}s  burning {int(fire.burning[0].sum()):>5}  "
+              f"panic {float(human.gamma[0]):.2f}  "
+              f"speed {float(human.vel[0].norm()):.2f} m/s")
 
-# Deliberately keep simulating after the rescue rather than cutting the recording
-# short: watching the fire carry on through the block they just left is most of
-# what makes the scene legible.
-print(f"\n  {'reached safety at t=%.1fs' % arrived_at if arrived_at is not None else 'never reached safety'}"
-      f"  ({clock.episode_seconds:g}s simulated)")
+# Deliberately simulated past the rescue: watching the fire carry on through the
+# block they just left is most of what makes the scene legible.
+outcome = f"reached safety at t={arrived_at:.1f}s" if arrived_at is not None \
+    else "never reached safety"
+print(f"\n  {outcome}  ({clock.episode_seconds:g}s simulated, {frames} frames)")
 
 if a.web:
-    print(f"\n  {steps_logged} frames recorded, playing on a loop at {a.speed:g}x.")
-    print("  Scrub the timeline at the bottom of the viewer to move through it.")
+    print(f"  playing on a loop at {a.speed:g}x. Scrub the timeline at the bottom.")
     try:
         input("\nserving -- press enter to stop\n")
     except EOFError:

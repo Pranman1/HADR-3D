@@ -802,6 +802,41 @@ leans downwind, and a person who panics and walks out.  No drones yet.
   Dropping only the blocked component lets them slide along and round the corner,
   which is also what a person does.
 
+**What the real city taught us that the 25 m block could not**
+
+- **Buildings burn, and giving them zero fuel says a city cannot have a fire.**
+  Zero-fuel buildings look like the right way to stop `firegrid`'s fire walking
+  through walls.  Downtown Berkeley is 44% building and most of the rest is
+  pavement, so with fireproof buildings a fire there cannot spread at all.  What
+  actually stops an urban fire is the *street*.
+- **A street is not a firebreak either.**  It has trees along it, cars parked on it,
+  bins, market stalls and spilled fuel.  Roads now carry a low fuel load rather than
+  none, and the fuel map has seven levels — trees, buildings, parks, car parks, bare
+  ground, road, water — rather than two.  Only open water is a true barrier.
+- **A one-square-metre ignition is a coin toss.**  It burns out in seconds having
+  had a handful of chances to catch, so whether there is a fire at all comes down to
+  luck.  Fires are lit as a patch, because a real one is not noticed until it is
+  already several metres across.
+- **Deciding slowly is not moving slowly.**  The episode was stepping the world once
+  per policy decision, so everything advanced in 0.5 s jumps.  Bodies now integrate
+  at 100 Hz, the person re-aims at 10 Hz, the policy will decide at 2 Hz, and the
+  fire spreads at 1 Hz.  This is exactly how the drones will move.
+- **Sharing one random stream couples everything.**  The fire's spread depended on
+  how many times the wind had been stepped, so raising the physics rate silently
+  changed which cells ignited — and fires "mysteriously" went out.  Each subsystem
+  now draws from its own forked stream.
+- **A cache keyed on the bounding box alone serves stale data.**  Adding street
+  trees to the query returned the old response, which has none, so the new code
+  looked broken rather than out of date.  The key now includes the query.
+
+**One thing worth saying plainly about scenarios.**  Where the person starts, where
+safety is, and where the fire is lit are *not* part of the model.  The paper
+hand-picks 40 origin/destination pairs around the perimeter and 4 fire origins in
+the interior, so the fire always sits between the person and the exit; those are in
+`scenarios/paper_parity.yaml`.  Dropping the same scenario onto an arbitrary city
+means choosing automatically, and `view_episode.py` does it by walking distance and
+fuel density.  That is a demo convenience.  No result should ever depend on it.
+
 **One honest gap, unchanged.**  The person still senses fire from a proximity field
 rather than a real line-of-sight check, so they can notice a fire through a wall —
 just not one across town.  The 2D simulator reads the *global* ground-truth grid with

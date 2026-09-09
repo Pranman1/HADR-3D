@@ -26,7 +26,7 @@ BERKELEY = osm.BBox(
 )
 
 pytestmark = pytest.mark.skipif(
-    not (osm.Path("maps/osm_cache") / f"{BERKELEY.key()}.json").exists(),
+    not (osm.Path("maps/osm_cache") / f"{BERKELEY.key(osm.QUERY)}.json").exists(),
     reason="OSM cache missing; run scripts/view_world.py --osm to populate it",
 )
 
@@ -175,23 +175,31 @@ def test_flyable_is_never_more_permissive_than_walkable(berkeley):
 
 # ------------------------------------------------------------------- fuel
 
-def test_buildings_do_not_burn(berkeley):
+def test_buildings_are_the_heaviest_fuel(berkeley):
+    """A building is the largest single thing on a block that is going to burn."""
     built = berkeley.solid_top > 0
-    assert bool((berkeley.fuel[built] == 0).all())
+    assert bool((berkeley.fuel[built] == osm.FUEL_BUILDING).all())
+    assert osm.FUEL_BUILDING > osm.FUEL_GROUND > osm.FUEL_ROAD
 
 
-def test_roads_are_firebreaks(berkeley):
-    """Streets must be zero-fuel, and there must be enough of them to matter."""
+def test_streets_slow_a_fire_without_stopping_it(berkeley):
+    """A road is not a firebreak.  It has trees along it, cars parked on it, bins,
+    market stalls and spilled fuel.  Treating it as an absolute barrier is as wrong
+    as treating buildings as fireproof."""
     t = berkeley
-    zero_fuel = (t.fuel == 0).sum()
-    built = (t.solid_top > 0).sum()
-    road_cells = int(zero_fuel - built)
-    assert road_cells > 0.05 * t.shape[0] * t.shape[1], "a city should have streets"
+    assert 0.0 < osm.FUEL_ROAD < osm.FUEL_GROUND
+    road_like = (t.fuel > 0) & (t.fuel <= osm.FUEL_ROAD)
+    assert int(road_like.sum()) > 0.05 * t.shape[0] * t.shape[1], "a city has streets"
+
+
+def test_the_fuel_map_has_more_than_two_values(berkeley):
+    """Trees, cars, parks, buildings and pavement do not all burn the same."""
+    assert len(torch.unique(berkeley.fuel)) >= 4
 
 
 def test_vegetation_burns_more_than_bare_ground(berkeley):
-    assert osm.FUEL_VEG > osm.FUEL_GROUND > osm.FUEL_ROAD
-    assert bool((berkeley.fuel <= osm.FUEL_VEG).all())
+    assert osm.FUEL_TREE >= osm.FUEL_VEG > osm.FUEL_GROUND > osm.FUEL_ROAD
+    assert bool((berkeley.fuel <= osm.FUEL_TREE).all())
 
 
 CELL, SHAPE = 0.5, (300, 300)     # a generous 150 m x 150 m, so nothing clips

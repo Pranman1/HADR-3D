@@ -20,8 +20,10 @@ Three OSM facts drive the code below:
     a fuel-station canopy.  That is exactly the canopy the paper's map implies, so
     the low-drone-sees-under-it asymmetry arrives from real data for free.
 
-  - Roads are the firebreaks.  Rasterising the street network to zero fuel is what
-    stops a city fire behaving like a fire in an open field.
+  - Roads are the firebreaks -- and the only real ones.  Buildings burn, and burn
+    hardest; what actually stops an urban fire is the street.  Rasterising the road
+    network to zero fuel is most of what makes a city fire behave like a city fire,
+    and giving buildings zero fuel instead would say a city cannot have one.
 
 Results are cached under maps/osm_cache/ by bounding box, so a scenario built from a
 real place stays reproducible offline and Overpass is queried once.
@@ -70,9 +72,25 @@ DEFAULT_CANOPY_M = 3.0
 CANOPY_THICKNESS_M = 0.4
 MIN_HEADROOM_M = 2.2    # a canopy you could not walk under would be a wall
 
+# How readily each surface carries fire.  Nothing is exactly zero except open water,
+# because almost nothing in a city is: a street has trees along it, cars parked on
+# it, bins, market stalls and spilled fuel.  A road slows a fire and steers it; it
+# does not reliably stop one, and treating it as an absolute barrier is as wrong as
+# treating buildings as fireproof.
 FUEL_GROUND = 0.7       # ordinary ground: some vegetation, some pavement
 FUEL_VEG = 1.5          # parks, grass, woodland
-FUEL_ROAD = 0.0         # a street is a firebreak
+FUEL_TREE = 1.8         # street trees and tree rows: the fastest thing on the block
+FUEL_BUILDING = 1.4     # the biggest single load of fuel there is
+FUEL_PARKING = 0.55     # a car park is a field of fuel tanks
+FUEL_ROAD = 0.18        # street furniture, parked cars, debris. Slows, does not stop
+FUEL_WATER = 0.0        # the one real firebreak
+TREE_RADIUS_M = 3.5     # canopy of a single mapped street tree
+
+WATER_TAGS = {"natural": {"water", "bay", "strait"},
+              "landuse": {"reservoir", "basin"},
+              "waterway": {"riverbank", "dock"}}
+
+PARKING_TAGS = {"amenity": {"parking"}, "landuse": {"garages"}}
 
 VEG_TAGS = {
     "landuse": {"grass", "forest", "meadow", "orchard", "vineyard", "cemetery",
@@ -110,10 +128,15 @@ class BBox:
             (self.north - self.south) * M_PER_DEG_LAT,
         )
 
-    def key(self) -> str:
-        return hashlib.sha1(
-            f"{self.south:.6f},{self.west:.6f},{self.north:.6f},{self.east:.6f}".encode()
-        ).hexdigest()[:16]
+    def key(self, query: str = "") -> str:
+        """Cache key. Includes the query, not just the box.
+
+        Keying on the bounding box alone means that adding a feature type -- street
+        trees, car parks, water -- silently serves the old response, which has none of
+        them, and the new code looks broken rather than stale.
+        """
+        blob = f"{self.south:.6f},{self.west:.6f},{self.north:.6f},{self.east:.6f}|{query}"
+        return hashlib.sha1(blob.encode()).hexdigest()[:16]
 
 
 def geocode(place: str) -> tuple[float, float]:
@@ -148,6 +171,9 @@ QUERY = """[out:json][timeout:180];
   way["landuse"]({s},{w},{n},{e});
   way["natural"]({s},{w},{n},{e});
   way["leisure"]({s},{w},{n},{e});
+  way["amenity"="parking"]({s},{w},{n},{e});
+  way["waterway"]({s},{w},{n},{e});
+  node["natural"="tree"]({s},{w},{n},{e});
 );
 out body geom;
 """
@@ -155,13 +181,13 @@ out body geom;
 
 def fetch(bbox: BBox, cache_dir: str | Path = "maps/osm_cache") -> dict:
     """Overpass, cached to disk by bounding box so this is queried once, ever."""
-    cache = Path(cache_dir) / f"{bbox.key()}.json"
+    q = QUERY.format(s=bbox.south, w=bbox.west, n=bbox.north, e=bbox.east)
+    cache = Path(cache_dir) / f"{bbox.key(QUERY)}.json"
     if cache.exists():
         return json.loads(cache.read_text())
 
     import requests
 
-    q = QUERY.format(s=bbox.south, w=bbox.west, n=bbox.north, e=bbox.east)
     for attempt in range(3):
         r = requests.post(OVERPASS, data={"data": q}, headers={"User-Agent": UA},
                           timeout=300)
@@ -219,6 +245,19 @@ def _is_vegetation(tags: dict) -> bool:
     return any(tags.get(k) in vals for k, vals in VEG_TAGS.items())
 
 
+def _surface_fuel(tags: dict) -> float | None:
+    """Fuel load for an area feature, or None if it is not one."""
+    if any(tags.get(k) in vals for k, vals in WATER_TAGS.items()):
+        return FUEL_WATER
+    if any(tags.get(k) in vals for k, vals in PARKING_TAGS.items()):
+        return FUEL_PARKING
+    if tags.get("natural") in ("tree_row", "wood") or tags.get("landuse") == "forest":
+        return FUEL_TREE
+    if _is_vegetation(tags):
+        return FUEL_VEG
+    return None
+
+
 # ------------------------------------------------------------- geometry
 
 def _project(bbox: BBox):
@@ -252,6 +291,7 @@ def load(
     radius_m: float = 250.0,
     cell_size_m: float = 1.0,
     llr_clearance_m: float = LLR_CLEARANCE_M,
+    burnable_buildings: bool = True,
     cache_dir: str | Path = "maps/osm_cache",
     device="cpu",
 ) -> Terrain:
@@ -275,15 +315,16 @@ def load(
     fuel = np.full(shape, FUEL_GROUND, dtype=np.float32)
     prints: list[Footprint] = []
 
-    # Vegetation first: buildings and roads overwrite it.
+    # Surfaces first: roads, then buildings, are painted over the top of them.
     for el in data["elements"]:
         tags = el.get("tags", {})
-        if not _is_vegetation(tags):
+        load = _surface_fuel(tags)
+        if load is None:
             continue
         for ring in _rings(el, proj):
             if (hit := fill_polygon(ring, shape, cell_size_m)) is not None:
                 sl, mask = hit
-                fuel[sl][mask] = FUEL_VEG
+                fuel[sl][mask] = load
 
     # Streets: the firebreaks that make a city fire behave like a city fire.
     for el in data["elements"]:
@@ -297,7 +338,22 @@ def load(
         width = width or ROAD_WIDTH_M.get(tags["highway"], DEFAULT_ROAD_WIDTH_M)
         if (hit := stroke_line(line, width, shape, cell_size_m)) is not None:
             sl, mask = hit
-            fuel[sl][mask] = FUEL_ROAD
+            # Take the lower of the two: a road through a park is still a road, but a
+            # road already marked as water (a ford, a bridge deck over a river) stays
+            # the barrier it is.
+            fuel[sl][mask] = np.minimum(fuel[sl][mask], FUEL_ROAD)
+
+    # Street trees, which OSM maps as individual points. They are what carries a fire
+    # along a road that would otherwise slow it down.
+    for el in data["elements"]:
+        if el.get("type") != "node" or el.get("tags", {}).get("natural") != "tree":
+            continue
+        x, y = proj(el["lat"], el["lon"])
+        r = TREE_RADIUS_M
+        ring = np.array([[x - r, y - r], [x + r, y - r], [x + r, y + r], [x - r, y + r]])
+        if (hit := fill_polygon(ring, shape, cell_size_m)) is not None:
+            sl, mask = hit
+            fuel[sl][mask] = np.maximum(fuel[sl][mask], FUEL_TREE)
 
     # Buildings last, so they win over whatever they stand on.
     for el in data["elements"]:
@@ -323,7 +379,7 @@ def load(
                 can_z1[sl][mask] = np.maximum(can_z1[sl][mask], top)
             else:
                 solid[sl][mask] = np.maximum(solid[sl][mask], h)
-                fuel[sl][mask] = 0.0    # fire does not cross a building footprint
+                fuel[sl][mask] = FUEL_BUILDING if burnable_buildings else 0.0
             prints.append(Footprint(
                 xy=torch.tensor(ring, dtype=torch.float32),
                 base_m=base,

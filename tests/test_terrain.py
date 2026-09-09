@@ -52,9 +52,11 @@ def test_rust25_loads_consistently():
     t = terr.load("maps/rust25.yaml")
     n = t.shape[0] * t.shape[1]
     assert t.shape == (25, 25)
-    # fire may not cross a solid building, and may cross everything else
-    assert bool(((t.fuel == 0.0) == (t.solid_top > 0)).all())
-    assert int((t.fuel > 0).sum()) == n - int((t.solid_top > 0).sum())
+    # Buildings burn, and burn hardest: they are the largest single load of fuel on
+    # a block. Giving them zero fuel would say a city cannot have a fire.
+    assert bool((t.fuel[t.solid_top > 0] == terr.FUEL_BUILDING).all())
+    assert terr.FUEL_BUILDING > terr.FUEL_OPEN
+    assert int((t.fuel > 0).sum()) == n
     # a canopy is a roof with air under it, never overlapping a solid
     assert bool((t.canopy_z0[t.canopy_z1 > 0] > 0).all())
     assert bool((t.solid_top[t.canopy_z1 > 0] == 0).all())
