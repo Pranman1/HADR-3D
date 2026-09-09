@@ -273,6 +273,105 @@ def test_speed_is_capped():
     assert float(v.norm()) <= 2.0 + 1e-5
 
 
+def test_a_person_goes_round_a_fire_not_through_it():
+    """The paper plans A* over the static map once, so the fire is something walked
+    into rather than avoided.  Pricing the route and re-planning on a slow clock
+    produces a detour, the way a blocked street does in life."""
+    class Corridor:
+        cell_size_m = 1.0
+        shape = (61, 61)
+        fuel = torch.ones(61, 61)
+        solid_top = torch.zeros(61, 61)
+        walkable = torch.ones(61, 61, dtype=torch.bool)
+
+    def cross(ignite):
+        t = Corridor()
+        rng = Rng(0)
+        fire, smoke = fire_mod.Fire(t, 1), smoke_mod.Smoke(t, 1)
+        w = wind_mod.still(1)
+        h = Human(t, 1, PanicParams(gamma_floor=0.0, time_stress_s=1e9))
+        crowd = Crowd(t)
+        if ignite:
+            fire.reset(torch.tensor([list(ignite)]), radius_m=6.0)
+        h.reset(torch.tensor([[10.0, 30.0]]), torch.tensor([[50.0, 30.0]]))
+
+        want, detour, burned = torch.zeros(1, 2), 0.0, False
+        for i in range(12000):
+            if i % 10 == 0:
+                smoke.update(fire, w)
+                want = h.desired_velocity(fire, smoke, rng, 0.1)
+            h.gamma.fill_(0.0)
+            h.integrate(crowd.step(h.pos, h.vel, want, 0.01), 0.01)
+            detour = max(detour, abs(float(h.pos[0, 1]) - 30.0))
+            c = h.pos[0].long().clamp(0, 60)
+            burned |= bool(fire.burning[0, c[0], c[1]] or fire.burnt[0, c[0], c[1]])
+            if h.reached[0]:
+                break
+        return bool(h.reached[0]), detour, burned
+
+    got, straight, _ = cross(None)
+    assert got and straight < 3.0, "a clear route should be walked straight"
+
+    got, detour, burned = cross((30, 30))
+    assert got, "a detour exists; they should still get out"
+    assert detour > 8.0, f"should go round the fire, deviated only {detour:.1f} m"
+    assert not burned, "should never walk into the fire"
+
+
+def test_a_person_will_not_fit_through_a_gap_narrower_than_they_are():
+    """Testing the cell under someone's centre lets them clip building corners and
+    thread gaps their shoulders do not fit through.
+
+    Checked at quarter-metre cells, because at one-metre cells the narrowest gap the
+    grid can even represent is a metre wide -- which a person fits through easily, so
+    there is nothing to test.
+    """
+    class Wall:
+        cell_size_m = 0.25
+        shape = (81, 81)
+        fuel = torch.ones(81, 81)
+        solid_top = torch.zeros(81, 81)
+
+        def __init__(self, gap_cells):
+            self.walkable = torch.ones(81, 81, dtype=torch.bool)
+            self.walkable[40, :] = False
+            mid = 40
+            self.walkable[40, mid - gap_cells // 2: mid + (gap_cells + 1) // 2] = True
+            self.solid_top = (~self.walkable).float() * 6.0
+
+    def can_pass(gap_cells):
+        t = Wall(gap_cells)
+        crowd = Crowd(t)
+        pos = torch.tensor([[39.5 * t.cell_size_m, 40.0 * t.cell_size_m]])
+        v = crowd.step(pos, torch.zeros(1, 2), torch.tensor([[1.0, 0.0]]), 0.5)
+        return float(v[0, 0]) > 0.0
+
+    assert not can_pass(2), "0.5 m gap: shoulders do not fit"
+    assert can_pass(8), "2 m gap: walks through without trouble"
+
+
+def test_a_person_never_clips_a_building_corner():
+    """Their centre must never come closer to a wall than their own radius."""
+    t = rust25()
+    rng = Rng(0)
+    fire, smoke = fire_mod.Fire(t, 8), smoke_mod.Smoke(t, 8)
+    w = wind_mod.still(8)
+    h, crowd = Human(t, 8), Crowd(t)
+    h.reset(torch.tensor([[0.5, 0.5]] * 8), torch.tensor([[22.5, 24.5]] * 8))
+
+    from hadrsim.world import nav
+    clear = nav.clearance(t.walkable, t.cell_size_m)[None].expand(8, -1, -1)
+
+    want, closest = torch.zeros(8, 2), 1e9
+    for i in range(4000):
+        if i % 10 == 0:
+            want = h.desired_velocity(fire, smoke, rng, 0.1)
+        h.integrate(crowd.step(h.pos, h.vel, want, 0.01), 0.01)
+        closest = min(closest, float(nav.sample(clear, h.pos, t.cell_size_m).min()))
+    assert closest >= crowd.p.body_radius_m, (
+        f"a body centre came within {closest:.2f} m of a wall")
+
+
 # ---------------------------------------------------------------- reproducible
 
 def test_same_seed_same_walk():

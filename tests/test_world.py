@@ -293,6 +293,39 @@ def test_flow_still_works_beside_a_wall():
     assert float(usable.float().mean()) > 0.98
 
 
+def test_flow_routes_around_an_obstacle_rather_than_backing_away():
+    """The bug this exists for pointed people straight backwards.
+
+    A central difference is fine in the open and wrong wherever it matters.  Put
+    something expensive directly between someone and their goal and the x-difference
+    says "ahead is costly, go back" while the y-difference is zero by symmetry.  The
+    route was there; the reader of it was not.
+    """
+    walk = torch.ones(41, 41, dtype=torch.bool)
+    cost = torch.ones(1, 41, 41)
+    cost[0, 24:30, 14:27] = 200.0                  # a wall of expense, not of geometry
+    d = nav.distance_field(walk, torch.tensor([[35, 20]]), 1.0, cost=cost)
+    f = nav.flow(d)
+
+    assert f[0, 15, 20, 0] > 0, "must still head toward the goal, not away from it"
+    assert abs(float(f[0, 20, 20, 1])) > 0.5, "must break sideways to get round"
+    assert float(nav.sample(d, torch.tensor([[25.0, 20.0]]), 1.0)) > \
+        float(nav.sample(d, torch.tensor([[25.0, 30.0]]), 1.0)), "detour must be cheaper"
+
+
+def test_cost_makes_a_route_bend_without_forbidding_it():
+    """A person passes closer to a fire than they would like if the alternative is a
+    long way round, and not if it is not.  A mask cannot say that; a cost can."""
+    walk = torch.ones(41, 41, dtype=torch.bool)
+    plain = nav.distance_field(walk, torch.tensor([[30, 20]]), 1.0)
+    cost = torch.ones(1, 41, 41)
+    cost[0, 24:28, :] = 20.0
+    priced = nav.distance_field(walk, torch.tensor([[30, 20]]), 1.0, cost=cost)
+
+    assert float(priced[0, 10, 20]) > float(plain[0, 10, 20]), "should cost more"
+    assert float(priced[0, 10, 20]) < nav.UNREACHABLE / 2, "but must stay reachable"
+
+
 def test_walls_are_unreachable_not_far():
     t = terr.load("maps/rust25.yaml")
     d = nav.distance_field(t.walkable, torch.tensor([[0, 0]]), 1.0)

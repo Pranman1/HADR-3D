@@ -36,12 +36,18 @@ def distance_field(
     goal_xy: torch.Tensor,
     cell_size_m: float = 1.0,
     max_iters: int | None = None,
+    cost: torch.Tensor | None = None,
 ) -> torch.Tensor:
-    """(B, W, H) metres to the goal, by the shortest walkable path.
+    """(B, W, H) cost-to-go to the goal, by the cheapest walkable path.
 
     `walkable` is (W, H) and shared -- every environment walks the same city.
     `goal_xy` is (B, 2) in cells. Unreachable cells come back as UNREACHABLE, not inf,
     so that arithmetic on the field does not produce NaN.
+
+    `cost` is an optional (B, W, H) multiplier on the price of entering each cell.
+    One means ordinary ground; larger means somewhere you would rather not go, which
+    is how a route bends around a fire instead of walking into it.  With no cost the
+    result is plain distance in metres.
     """
     w, h = walkable.shape
     b = len(goal_xy)
@@ -60,11 +66,13 @@ def distance_field(
     if max_iters is None:
         max_iters = w + h
 
+    price = step if cost is None else step * cost.clamp_min(1e-3)
+
     for _ in range(max_iters):
         prev = dist
         best = dist
-        for dx, dy, cost in NEIGHBOURS:
-            best = torch.minimum(best, _shift(dist, dx, dy) + cost * step)
+        for dx, dy, step_cost in NEIGHBOURS:
+            best = torch.minimum(best, _shift(dist, dx, dy) + step_cost * price)
         dist = best.masked_fill(blocked[None], UNREACHABLE).clamp_max(UNREACHABLE)
         if torch.equal(dist, prev):
             break
@@ -89,8 +97,8 @@ def clearance(walkable: torch.Tensor, cell_size_m: float = 1.0) -> torch.Tensor:
     for _ in range(w + h):
         prev = dist
         best = dist
-        for dx, dy, cost in NEIGHBOURS:
-            best = torch.minimum(best, _shift(dist, dx, dy) + cost * cell_size_m)
+        for dx, dy, step_cost in NEIGHBOURS:
+            best = torch.minimum(best, _shift(dist, dx, dy) + step_cost * cell_size_m)
         dist = best.clamp_max(UNREACHABLE)
         if torch.equal(dist, prev):
             break
@@ -100,28 +108,37 @@ def clearance(walkable: torch.Tensor, cell_size_m: float = 1.0) -> torch.Tensor:
 def flow(dist: torch.Tensor) -> torch.Tensor:
     """(B, W, H, 2) unit vectors pointing the way out.
 
-    Downhill on the distance field, in cell coordinates.  Zero only where there is
-    genuinely nowhere to go: at the goal, or somewhere walled off entirely.
+    **Pick the best neighbour, do not difference the field.**  A central difference
+    is fine in the open and wrong wherever it matters.  Put an obstacle -- a
+    building, or a fire the route is priced away from -- directly between someone and
+    their goal, and the x-difference says "the way ahead is expensive, go back" while
+    the y-difference is zero by symmetry, so the flow points them straight backwards
+    instead of around.  The route was there; the reader of it was not.
 
-    Two things this has to get right, and both are easy to get wrong:
+    Taking the cheapest of the eight neighbours, one step of lookahead including what
+    the step itself costs, is exact for a field built this way and degrades sensibly
+    at walls, since a blocked neighbour is simply never the cheapest.
 
-      - **A wall is not "infinitely far away".**  Substituting UNREACHABLE into the
-        difference makes the gradient enormous and points everyone at the nearest
-        wall.  Treating a blocked neighbour as *no better than here* instead makes it
-        contribute nothing, so the flow simply follows the directions that are open.
-      - **Downhill, not uphill.**  `_shift(d, +1)` returns the neighbour at -x, so
-        `_shift(d, 1) - _shift(d, -1)` is already `d[x-1] - d[x+1]`, which points the
-        way the distance decreases.  Negating it sends everyone away from the exit.
+    Zero only where there is genuinely nowhere to go: at the goal, or walled off.
     """
-    def neighbour(dx: int, dy: int) -> torch.Tensor:
-        s = _shift(dist, dx, dy)
-        return torch.where(s >= UNREACHABLE / 2, dist, s)
+    offsets = torch.tensor([[dx, dy] for dx, dy, _ in NEIGHBOURS],
+                           dtype=dist.dtype, device=dist.device)
+    step_costs = torch.tensor([c for _, _, c in NEIGHBOURS],
+                              dtype=dist.dtype, device=dist.device)
 
-    v = torch.stack([
-        neighbour(1, 0) - neighbour(-1, 0),
-        neighbour(0, 1) - neighbour(0, -1),
-    ], dim=-1)
-    v = torch.where(dist[..., None] >= UNREACHABLE / 2, torch.zeros_like(v), v)
+    # `_shift(d, -dx, -dy)` reads the neighbour lying at +(dx, dy) from each cell.
+    neighbours = torch.stack(
+        [_shift(dist, -dx, -dy) for (dx, dy, _) in NEIGHBOURS], dim=0
+    )                                                          # (8, B, W, H)
+    # Step cost breaks ties toward the straight neighbours; it must not enter the
+    # "is anywhere better" test, because on a converged field the winning neighbour
+    # plus its step cost *equals* this cell's own value by construction -- so testing
+    # against that marks every cell in the map as stuck.
+    best = (neighbours + step_costs[:, None, None, None]).argmin(dim=0)
+    v = offsets[best]                                          # (B, W, H, 2)
+
+    stuck = (neighbours.amin(dim=0) >= dist) | (dist >= UNREACHABLE / 2)
+    v = torch.where(stuck[..., None], torch.zeros_like(v), v)
     return v / v.norm(dim=-1, keepdim=True).clamp_min(1e-6)
 
 

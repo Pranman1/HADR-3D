@@ -5,10 +5,15 @@ No drones yet -- this is step 1 of the plan, the world on its own.
 Defaults to a real city, because that is the point of the thing.  `--paper` switches
 to the published 25 x 25 grid, which exists only for comparing against Table I.
 
-    python scripts/view_episode.py --web
-    python scripts/view_episode.py --osm "Financial District, San Francisco" --web
-    python scripts/view_episode.py --wind 8 --bearing 45 --web
-    python scripts/view_episode.py --paper --web
+    python scripts/view_episode.py                       # writes episode.mp4
+    python scripts/view_episode.py --osm "Financial District, San Francisco"
+    python scripts/view_episode.py --wind 8 --bearing 45 -o windy.mp4
+    python scripts/view_episode.py --paper
+    python scripts/view_episode.py --web                 # live 3D viewer instead
+
+By default it writes a video file and exits.  `--web` gets the live 3D viewer, which
+is better for poking around a scene and worse for simply looking at one, since it
+needs a server, two ports, a browser and a URL.
 
 **Where things get placed is this script's business, not the paper's.**  The paper
 hand-picks 40 origin/destination pairs and 4 fire origins on one 25 m block, and
@@ -44,7 +49,11 @@ p.add_argument("--cell", type=float, default=1.0)
 p.add_argument("--wind", type=float, default=0.0, help="wind speed, m/s")
 p.add_argument("--bearing", type=float, default=45.0, help="degrees, blown towards")
 p.add_argument("--seed", type=int, default=0)
-p.add_argument("--web", action="store_true")
+p.add_argument("--web", action="store_true",
+               help="live 3D viewer instead of writing a video")
+p.add_argument("-o", "--out", default="episode.mp4",
+               help="video to write (.mp4 or .gif)")
+p.add_argument("--fps", type=int, default=25)
 p.add_argument("--save", default=None)
 p.add_argument("--speed", type=float, default=2.0, help="playback speed")
 p.add_argument("--paused", action="store_true", help="do not auto-play")
@@ -123,8 +132,13 @@ print(f"fire at {ignite.tolist()}  "
 print(f"wind {a.wind} m/s towards {a.bearing} deg\n")
 
 # ------------------------------------------------------------------- the episode
-viz.start("hadrsim-episode", web=a.web, save=a.save, play=not a.paused, speed=a.speed)
-viz.log_terrain(t)
+recorder = None
+if a.web or a.save:
+    viz.start("hadrsim-episode", web=a.web, save=a.save, play=not a.paused, speed=a.speed)
+    viz.log_terrain(t)
+else:
+    from hadrsim.viz.render import Recorder
+    recorder = Recorder(t, scale=2 if max(t.shape) < 400 else 1)
 
 dt = clock.dt                       # 0.01 s -- bodies move at 100 Hz
 want = torch.zeros(1, 2)
@@ -146,17 +160,21 @@ for tick in range(int(clock.episode_seconds * clock.physics_hz)):
     wind.step(dt, rng_wind)
     fire.step(dt, wind, rng_fire)
 
-    if tick % clock.viz_substeps == 0:
-        viz.log_time(now)
-        viz.log_human(human)
-        frames += 1
     if tick % half_second == 0:
-        # Fire and smoke change slowly, and the ground texture is by far the most
-        # expensive thing logged, so they get 2 Hz while the person gets 20.
         smoke.update(fire, wind)
-        viz.log_time(now)
-        viz.log_fire(fire)
-        viz.log_smoke(smoke)
+
+    if tick % clock.viz_substeps == 0:
+        frames += 1
+        if recorder is not None:
+            recorder.frame(fire, smoke, human)
+        else:
+            viz.log_time(now)
+            viz.log_human(human)
+            if tick % half_second == 0:
+                # Fire and smoke change slowly and the ground texture is the most
+                # expensive thing logged, so they get 2 Hz while the person gets 20.
+                viz.log_fire(fire)
+                viz.log_smoke(smoke)
 
     if human.reached[0] and arrived_at is None:
         arrived_at = now
@@ -172,7 +190,11 @@ outcome = f"reached safety at t={arrived_at:.1f}s" if arrived_at is not None \
     else "never reached safety"
 print(f"\n  {outcome}  ({clock.episode_seconds:g}s simulated, {frames} frames)")
 
-if a.web:
+if recorder is not None:
+    path = recorder.save(a.out, fps=a.fps)
+    seconds = frames / a.fps
+    print(f"  wrote {path}  ({frames} frames, {seconds:.0f}s at {a.fps} fps)")
+elif a.web:
     print(f"  playing on a loop at {a.speed:g}x. Scrub the timeline at the bottom.")
     try:
         input("\nserving -- press enter to stop\n")

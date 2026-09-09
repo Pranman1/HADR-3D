@@ -40,6 +40,7 @@ class CrowdParams:
     person_force: float = 3.0
     max_speed_mps: float = 2.5     # nobody sprints faster than this
     max_accel_mps2: float = 4.0
+    body_radius_m: float = 0.28    # shoulder half-width
 
 
 class Crowd:
@@ -101,11 +102,18 @@ class Crowd:
         forever and never gets anywhere.  Dropping only the blocked component lets
         them run along the wall and round the corner, which is also what a person
         does.
+
+        **A person has width.**  Testing whether the cell under their centre is not
+        wall lets them clip building corners diagonally and thread gaps narrower than
+        their shoulders, which is exactly what it looks like.  Requiring clearance of
+        at least a body radius fixes both, and it is the same test either way.
         """
         def walkable_at(p):
             w, h = self.terrain.walkable.shape
             c = (p / cell).long()
-            return self.terrain.walkable[c[:, 0].clamp(0, w - 1), c[:, 1].clamp(0, h - 1)]
+            x = c[:, 0].clamp(0, w - 1)
+            y = c[:, 1].clamp(0, h - 1)
+            return self.terrain.walkable[x, y] & (self.clearance[x, y] >= self.p.body_radius_m)
 
         zero = torch.zeros_like(vel)
         slide_x = torch.stack([vel[:, 0], zero[:, 1]], dim=-1)

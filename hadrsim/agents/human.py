@@ -29,6 +29,15 @@ that equation:
   - **Following a rescuer is imperfect.**  The paper assumes that once reached, the
     person walks an ideal A* path to safety, which flatters the improvement figures.
     Here they follow with a lag, imprecisely, and lose the drone in thick smoke.
+  - **They go round the fire, not through it.**  The paper's route is A* over the
+    static map, computed once, so the fire is something the person walks into rather
+    than something they avoid.  Here the route is priced: cells near the fire cost
+    more to cross, and the route is recomputed every few seconds, so a blocked street
+    produces a detour the way it would in life.  Nobody re-plans continuously, which
+    is why it is on a slow clock rather than every step.
+  - **A person has width.**  They cannot cut a building's corner, and they cannot
+    squeeze through a gap narrower than they are.  The route is planned over cells
+    with enough clearance for a body, not over cells that merely are not wall.
 
 **One honest simplification.**  With a single evacuee there is no herd, so the
 "instinct" term is flight from the fire plus noise rather than crowd-following.  That
@@ -61,12 +70,19 @@ class PanicParams:
     time_stress_s: float = 90.0  # how long before the situation alone is stressful
     gamma_floor: float = 0.05    # nobody in a burning city is perfectly calm
     perception_m: float = 28.0   # how far a fire is frightening from
-    instinct_turn: float = 1.1   # how fast a panicked heading wanders, rad/sqrt(s)
-    instinct_bias: float = 0.55  # how strongly it is still pulled toward the exit
+    # Calibrated so full panic costs roughly twice the evacuation time, which is
+    # what the paper's Figure 2 reports. Retuned after the flow field started
+    # picking the best neighbour instead of differencing the field: better
+    # routes made the calm baseline faster, so the same wander cost 3x.
+    instinct_turn: float = 0.9   # how fast a panicked heading wanders, rad/sqrt(s)
+    instinct_bias: float = 0.70  # how strongly it is still pulled toward the exit
     smoke_slowdown: float = 0.55 # fraction of speed lost in the thickest smoke
     follow_lag_s: float = 1.2    # how sluggishly they follow a rescuer
     follow_noise: float = 0.25   # how imprecisely
     lose_sight_smoke: float = 0.8  # smoke density at which the rescuer is lost
+    body_radius_m: float = 0.28  # shoulder half-width. Sets the narrowest usable gap
+    replan_every_s: float = 4.0  # nobody re-plans their route continuously
+    fire_detour_cost: float = 60.0   # how far out of the way a fire is worth going
 
 
 class Human:
@@ -90,6 +106,8 @@ class Human:
 
         self._dist: torch.Tensor | None = None
         self._flow: torch.Tensor | None = None
+        self._passable: torch.Tensor | None = None
+        self._replanned_at = 0.0
 
     # ------------------------------------------------------------------ setup
 
@@ -104,13 +122,44 @@ class Human:
         self.following.zero_()
         self.elapsed = 0.0
 
-        self._dist = nav.distance_field(
-            self.terrain.walkable, (self.goal / cell).long(), cell
-        )
-        self._flow = nav.flow(self._dist)
+        # Plan over cells a body actually fits in.  Planning over "not wall" sends
+        # people diagonally through building corners and down gaps narrower than
+        # their shoulders, both of which look exactly as wrong as they are.
+        clear = nav.clearance(self.terrain.walkable, cell)
+        self._passable = self.terrain.walkable & (clear >= self.p.body_radius_m)
+        if not bool(self._passable[tuple((self.goal[0] / cell).long().tolist())]):
+            self._passable = self.terrain.walkable      # a goal in a doorway still works
+
+        self._replanned_at = -self.p.replan_every_s
+        self._replan(fire=None)
         # Start out heading the sensible way, so panic degrades a good plan rather
         # than starting from a random one.
         self.instinct_dir = nav.sample(self._flow, self.pos, cell).clone()
+
+    def _replan(self, fire) -> None:
+        """Recompute the route, pricing cells near the fire out of it.
+
+        Not a hard exclusion: a person will pass closer to a fire than they would
+        like if the alternative is a long way round, and will not if it is not.  A
+        cost multiplier says that, where a blocked/unblocked mask cannot.
+        """
+        cell = self.terrain.cell_size_m
+        cost = None
+        if fire is not None:
+            import torch.nn.functional as Fn
+
+            hot = fire.intensity[:, None]
+            near = torch.zeros_like(hot)
+            for radius_m, weight in ((2.0, 1.0), (6.0, 0.55), (12.0, 0.2)):
+                k = 2 * max(1, int(round(radius_m / cell))) + 1
+                near = torch.maximum(near, weight * Fn.max_pool2d(hot, k, 1, k // 2))
+            cost = 1.0 + self.p.fire_detour_cost * near[:, 0]
+
+        self._dist = nav.distance_field(
+            self._passable, (self.goal / cell).long(), cell, cost=cost
+        )
+        self._flow = nav.flow(self._dist)
+        self._replanned_at = self.elapsed
 
     # ------------------------------------------------------------------- step
 
@@ -119,6 +168,9 @@ class Human:
         """Where they are trying to go, before the body's momentum gets a say."""
         threat, flee = self._threat(fire, smoke)
         self._update_gamma(threat, smoke, dt)
+
+        if self.elapsed - self._replanned_at >= self.p.replan_every_s:
+            self._replan(fire)
 
         cell = self.terrain.cell_size_m
         sensible = nav.sample(self._flow, self.pos, cell)
