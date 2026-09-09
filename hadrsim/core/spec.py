@@ -29,8 +29,56 @@ looking for it will come:
 from __future__ import annotations
 
 from dataclasses import dataclass
+from enum import Enum
 
 SPEC_VERSION = 1
+
+# ---------------------------------------------------------------------- provenance
+
+class Provenance(str, Enum):
+    """How a drone came by a piece of information. The honesty of the whole sim.
+
+    It is easy to make human detection realistic and leave something else quietly
+    magic.  Fire is the one that nearly slipped through: ground-truth fire is
+    perfectly legitimate for deciding *where the person runs* -- that is just how a
+    simulator works -- but the moment a drone reads it, the policy is planning around
+    a fire map it never had to go and find.
+    """
+
+    PRIOR = "prior"
+    """Known before the mission started. A real team has building footprints; so do
+    we, from OpenStreetMap. Nothing to earn, and no dishonesty in having it."""
+
+    OBSERVED = "observed"
+    """Must be seen. Sensor range, field of view and line of sight all apply, and
+    what was seen goes stale. Never read from the simulator's own state."""
+
+    SHARED = "shared"
+    """Someone else saw it and told us. Arrives through `comms`, so it is coarse,
+    delayed, and may not arrive at all. How a real incident commander learns where a
+    fire is: other aircraft, ground crews, satellite."""
+
+    OWN = "own"
+    """The drone's own memory of its own actions. Free by definition."""
+
+
+RASTER_CHANNELS: tuple[tuple[str, Provenance], ...] = (
+    ("buildings", Provenance.PRIOR),
+    ("fire", Provenance.OBSERVED),      # plus SHARED beyond line of sight
+    ("smoke", Provenance.OBSERVED),
+    ("searched", Provenance.OWN),
+)
+
+# Fire and smoke are OBSERVED rather than needing a learned detector, and that is a
+# deliberate, defensible line rather than laziness.  A person at 60 m is 1.7 m of
+# low-contrast texture; a fire is a large, bright, hot thing with a plume above it.
+# "Reliably detected inside the sensor footprint, absent outside it" is a fair
+# description of reality for fire, where the identical claim about a person is not.
+#
+# Any code that fills these channels must therefore route through `sensing/`, never
+# read `world/fire.py` state directly.  That rule is what this table exists to make
+# checkable.
+
 
 # --------------------------------------------------------------------------- action
 
@@ -61,8 +109,9 @@ class ObsSpec:
     teammate_dim: int = 5
 
     # --- surroundings: a picture centred on the drone, always the same size, so map
-    # size never touches the network. Channels: occupancy, fire, smoke, already-looked.
-    raster_channels: int = 4
+    # size never touches the network. See RASTER_CHANNELS for what each layer is and,
+    # more importantly, what the drone had to do to earn it.
+    raster_channels: int = len(RASTER_CHANNELS)
     raster_size: int = 32
     raster_metres_per_cell: float = 2.0
 

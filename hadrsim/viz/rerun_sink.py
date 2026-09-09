@@ -162,3 +162,83 @@ def _log_boxes(path, mask, bottom, top, cell, color) -> None:
         [np.full_like(half_z, cell / 2), np.full_like(half_z, cell / 2), half_z], axis=-1
     )
     rr.log(path, rr.Boxes3D(centers=centres, half_sizes=halves, colors=[color]))
+
+
+# ------------------------------------------------------------------ the world
+
+C_FIRE_HOT = np.array([255, 214, 120])
+C_FIRE_COOL = np.array([200, 60, 24])
+C_BURNT = [46, 42, 44]
+C_HUMAN = [240, 236, 228]
+C_SMOKE = [176, 176, 180]
+
+
+def log_time(t_s: float) -> None:
+    rr.set_time("sim_time", duration=float(t_s))
+
+
+def log_fire(fire, path: str = "/world/fire", env: int = 0) -> None:
+    """Burning cells, coloured by how fiercely, plus the scar left behind."""
+    cell = fire.terrain.cell_size_m
+    intensity = fire.intensity[env].cpu().numpy()
+    burning = intensity > 0
+
+    xs, ys = np.nonzero(burning)
+    if len(xs):
+        i = intensity[xs, ys][:, None]
+        # Hot cores read yellow-white, dying edges red: the eye picks out the front.
+        colour = (C_FIRE_COOL + i * (C_FIRE_HOT - C_FIRE_COOL)).astype(np.uint8)
+        rr.log(f"{path}/flame", rr.Points3D(
+            positions=np.stack([(xs + 0.5) * cell, (ys + 0.5) * cell,
+                                np.full(len(xs), 0.3)], -1),
+            colors=colour, radii=cell * 0.45,
+        ))
+    else:
+        rr.log(f"{path}/flame", rr.Clear(recursive=False))
+
+    xs, ys = np.nonzero(fire.burnt[env].cpu().numpy())
+    rr.log(f"{path}/burnt", rr.Points3D(
+        positions=np.stack([(xs + 0.5) * cell, (ys + 0.5) * cell,
+                            np.full(len(xs), 0.05)], -1),
+        colors=[C_BURNT], radii=cell * 0.4,
+    ) if len(xs) else rr.Clear(recursive=False))
+
+
+def log_smoke(smoke, path: str = "/world/smoke", env: int = 0, floor: float = 0.02) -> None:
+    """The plume, as one translucent point per occupied voxel.
+
+    Thin smoke is dropped entirely rather than drawn faintly -- a few thousand visible
+    points read as a plume, a hundred thousand nearly-invisible ones read as fog and
+    cost a great deal to draw.
+    """
+    cell = smoke.terrain.cell_size_m
+    d = smoke.density[env].cpu().numpy()
+    alt = smoke.layer_altitudes.cpu().numpy()
+
+    ks, xs, ys = np.nonzero(d > floor)
+    if not len(ks):
+        rr.log(path, rr.Clear(recursive=False))
+        return
+    v = np.clip(d[ks, xs, ys] / max(d.max(), 1e-6), 0, 1)
+    colour = np.concatenate([np.tile(C_SMOKE, (len(ks), 1)),
+                             (40 + 180 * v)[:, None]], -1).astype(np.uint8)
+    rr.log(path, rr.Points3D(
+        positions=np.stack([(xs + 0.5) * cell, (ys + 0.5) * cell, alt[ks]], -1),
+        colors=colour, radii=cell * 0.8,
+    ))
+
+
+def log_human(human, path: str = "/world/human", env: int = 0) -> None:
+    """The person, coloured by how panicked, with a goal marker."""
+    p = human.pos[env].cpu().numpy()
+    g = human.goal[env].cpu().numpy()
+    panic = float(human.gamma[env])
+    # Calm reads pale, panicked reads hot -- so you can see the state without a plot.
+    colour = (np.array(C_HUMAN) * (1 - panic) + np.array([230, 90, 60]) * panic)
+
+    rr.log(f"{path}/person", rr.Points3D(
+        positions=[[p[0], p[1], 0.9]], colors=[colour.astype(np.uint8)], radii=0.45))
+    rr.log(f"{path}/goal", rr.Points3D(
+        positions=[[g[0], g[1], 0.5]], colors=[[110, 210, 140]], radii=1.2))
+    rr.log(f"{path}/panic", rr.Scalars(panic))
+    rr.log(f"{path}/speed", rr.Scalars(float(human.vel[env].norm())))

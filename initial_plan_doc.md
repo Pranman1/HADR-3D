@@ -172,23 +172,24 @@ For scale: the existing `perl` package is several thousand lines and does less.
 ```
                     budget  what it does                              [built]
 core/
-  spec.py           80   what a drone sees, what a drone can do. The contract   [49]
+  spec.py           80   what a drone sees, what a drone can do. The contract   [69]
   registry.py       40   maps a name in a scenario file to the class it means
-  clock.py          30   simulation step, control rate, episode length — in SECONDS
-  rng.py            30   randomness, seeded and passed in, never global
+  clock.py          30   simulation step, control rate, episode length — in SECONDS [29]
+  rng.py            30   randomness, seeded and passed in, never global         [25]
 world/
-  terrain.py       100   ground height, buildings, and what will burn           [74]
+  terrain.py       100   ground height, buildings, and what will burn           [75]
   raster.py         50   shapes -> grid cells. Knows nothing about maps         [44]
-  osm.py           230   real cities, from OpenStreetMap (section 5b)          [231]
-  fire.py          150   fire spread
-  smoke.py         100   smoke plume, derived from the fire
-  wind.py           40   wind, varying over time
+  osm.py           230   real cities, from OpenStreetMap (section 5b)          [232]
+  nav.py            80   the shortest way out, solved once per episode          [72]
+  fire.py          150   fire spread                                           [112]
+  smoke.py         100   smoke plume, derived from the fire                     [69]
+  wind.py           50   wind, varying over time                                [52]
 agents/
   drone.py         220   quadrotor equations of motion, three fidelity levels
   airframes.py      40   parameter tables for real drones (X500 V2, Crazyflie)
   autopilot.py     150   PX4-style cascade controller
-  human.py         120   Trivedi & Rao panic — the decision layer
-  crowd.py         100   social force — the motion layer
+  human.py         120   Trivedi & Rao panic — the decision layer              [120]
+  crowd.py         100   social force — the motion layer                        [58]
 sensing/
   fov.py            80   is this point inside the camera's cone
   occlusion.py     120   ray tracing — do buildings or smoke block the view
@@ -205,7 +206,7 @@ envs/
   train.py         250   the fast environment
   exec_ros.py      200   the real-time ROS 2 environment
 viz/
-  rerun_sink.py    120   drawing. Used by BOTH environments                     [93]
+  rerun_sink.py    170   drawing. Used by BOTH environments                    [147]
   mesh.py          110   building outlines -> triangles and texture coords     [103]
   facade.py         90   building colour and the shared window atlas            [83]
   isaac_bridge.py  150   photoreal (step 5), real meshes not procedural
@@ -213,7 +214,7 @@ policy/
   encoders.py      120   how the network reads its input (plain | CNN)
   ppo.py           150   the training loop
   ────────────────────
-  total          ~3,450        built so far: 679 code lines, 54 tests passing
+  total          ~3,480        built so far: 1,290 code lines, 93 tests passing
 ```
 
 **Five rules that keep it there**
@@ -730,7 +731,7 @@ Paper comparison is **last**.
 
 | Step | What ships | Done when |
 |---|---|---|
-| **1. World alone** | city, fire, smoke, person. No drones | fire respects fuel and buildings and burns out; the panic model reproduces the paper's Figure 2 shape; same seed gives the same run every time |
+| **1. World alone** ✅ | city, fire, smoke, person. No drones | ~~fire respects fuel and buildings and burns out; the panic model reproduces the paper's Figure 2 shape; same seed gives the same run every time~~ **all three met** — see §11b |
 | **2. Drones + oracle** | X500 model, PX4 autopilot, simulator still tells them where the person is, first trained network | it trains at all, and captures the person at a sane rate |
 | **3. Break the cheat** | real vision — view cone, buildings and smoke blocking sight, missed detections, false alarms, imperfect comms. Retrain | degrades gracefully, not off a cliff; an ablation shows the policy is no longer leaning on the oracle |
 | **4. Add the CNN** | option A: local picture + CNN | at least as good as the plain-network baseline, and the ablation shows the picture is actually used |
@@ -749,6 +750,63 @@ comparison stays at step 7. Costs almost nothing, avoids debugging blind.
 Each step is independently demoable. That matters more than it sounds: it is the
 difference between a project with something to show at any moment and one with something
 to show only at the end.
+
+---
+
+## 11b. Step 1, done  *(built)*
+
+The world runs on its own: a city, a fire that spreads and goes out, a plume that
+leans downwind, and a person who panics and walks out.  No drones yet.
+
+    python scripts/view_episode.py --wind 4 --bearing 30 --web
+
+**The three acceptance criteria, all met**
+
+- **Fire respects fuel and buildings, and burns out.**  Fuel and burnout are one
+  line of state each and they fix the three things wrong with `firegrid`: its fires
+  never go out, they spread through walls, and they are irreproducible.  Streets
+  become firebreaks for free, because `terrain` already gives them zero fuel.
+- **The panic model reproduces Figure 2.**  Held at fixed panic with no fire, so
+  panic is the only variable:
+
+  | panic | reached | mean time | vs calm |
+  |---|---|---|---|
+  | 0.0 | 100% | 27.5 s | 1.00x |
+  | 0.2 | 100% | 25.1 s | 0.91x |
+  | 0.4 | 88% | 25.7 s | 0.93x |
+  | 0.6 | 70% | 37.1 s | 1.35x |
+  | 0.8 | 64% | 51.9 s | 1.89x |
+  | 1.0 | 61% | 59.9 s | **2.18x** |
+
+  The paper says persistent panic "nearly doubles" evacuation time, and that is what
+  comes out.  The dip at low panic is the inverted-U from the stress literature:
+  speed rises before judgement fails.  This is now a test, so it cannot drift
+  unnoticed.
+- **A seed reproduces a run**, and the fire ticks at its own rate, so changing the
+  control rate does not change how the city burns.
+
+**Four bugs the tests caught, each now covered**
+
+- **The wind blew the fire upwind.**  A sign error in which neighbour ignites which:
+  the weight said "how readily fire travels along d" but the shift asked "is the
+  neighbour at +d alight", which propagates along -d.  Completely invisible in still
+  air, because the eight-neighbour set is symmetric.
+- **The flow field pointed away from the exit**, and every cell beside a wall had no
+  direction at all — treating a wall as *infinitely far* rather than as *no better
+  than here* makes the gradient enormous and aims everyone at the nearest wall.
+- **Panic saturated.**  Blurring the fire measures how *much* of it is nearby, not
+  how *close* it is; on a 25 m map that pins panic at maximum wherever you stand.
+  Proximity has to be a max over nearby fire, not a sum of it.
+- **A panicked person deadlocked against walls**, because stopping at an obstacle
+  zeroes the whole velocity and the desired direction still points into it next step.
+  Dropping only the blocked component lets them slide along and round the corner,
+  which is also what a person does.
+
+**One honest gap, unchanged.**  The person still senses fire from a proximity field
+rather than a real line-of-sight check, so they can notice a fire through a wall —
+just not one across town.  The 2D simulator reads the *global* ground-truth grid with
+no occlusion at all, so this is strictly better and still not right.  It becomes
+right when `sensing/occlusion.py` exists.
 
 ---
 
@@ -924,19 +982,18 @@ be closed, each costing nothing to leave open today.
 `world/raster.py`, `world/osm.py`, `viz/rerun_sink.py`, `viz/mesh.py`, `viz/facade.py`.
 679 code lines, 54 tests.
 
+**Done:** the whole world layer — `core/{spec,clock,rng}`, `world/{terrain,raster,osm,
+nav,fire,smoke,wind}`, `agents/{human,crowd}`, `viz/{rerun_sink,mesh,facade}`.
+1,290 code lines, 93 tests. **Step 1 of section 11 is complete.**
+
 **Next, in order:**
 
-1. **Amend `core/spec.py`** for the fire-provenance rule in §6 — the raster's channels
-   need to record where each one legitimately comes from, so no later code can quietly
-   read ground-truth fire.
-2. **`world/fire.py`** — spread with fuel, moisture, burnout and wind. Watchable in the
-   viewer from the first commit.
-3. **`world/smoke.py`** and **`world/wind.py`** — the plume that occludes the high
-   drone, derived from the fire.
-4. **`agents/human.py`** and **`agents/crowd.py`** — Trivedi & Rao on top, social force
-   underneath. Ends step 1: the world alone, no drones.
-5. Then step 2: `agents/airframes.py`, `agents/drone.py`, `agents/autopilot.py`,
-   `envs/train.py`, `policy/ppo.py`.
+1. **`agents/airframes.py`** — the X500 V2's real numbers. Ten of them.
+2. **`agents/drone.py`** — quadrotor equations of motion, three fidelity levels.
+3. **`agents/autopilot.py`** — PX4's cascade with PX4's gains.
+4. **`sensing/{fov,occlusion,detector}.py`** — starting with the oracle detector, and
+   closing the fire-provenance gap above at the same time.
+5. **`reward/`, `envs/train.py`, `policy/ppo.py`** — and step 2 is training.
 
 **To ask Gaby, in one message:**
 
