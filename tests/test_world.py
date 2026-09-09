@@ -98,13 +98,27 @@ def test_fire_spreads_but_not_instantly():
     assert 1 < int((early.burning | early.burnt).sum()) < int((late.burning | late.burnt).sum())
 
 
-def test_fire_cannot_cross_a_firebreak():
-    """A road is zero fuel, and zero fuel must be impassable to fire."""
+def test_creeping_fire_cannot_cross_a_firebreak():
+    """In still air, zero fuel is impassable: brands fall back into the fire."""
     t = OpenField(41)
     t.fuel[20, :] = 0.0                       # a road straight across the map
     f = burn(t, 300, wind_mod.still(1), at=(10, 20))
     assert not bool((f.burning | f.burnt)[0, 21:, :].any()), "fire jumped the road"
     assert bool((f.burning | f.burnt)[0, :20, :].any()), "fire did not spread at all"
+
+
+def test_wind_carries_embers_over_a_firebreak():
+    """And in wind it must, or a correct fuel map gives a fire that burns one block.
+
+    Contact spread alone cannot get across eight metres of road.  Real urban fires
+    cross firebreaks by throwing burning brands downwind, and that -- not creeping --
+    is what turns a building fire into a conflagration.
+    """
+    t = OpenField(61)
+    t.fuel[28:33, :] = 0.0                    # a five-metre road, no fuel at all
+    downwind = wind_mod.make(1, speed_mps=8.0, bearing_deg=0.0)   # towards +x
+    f = burn(t, 200, downwind, seed=1, at=(15, 30))
+    assert bool((f.burning | f.burnt)[0, 33:, :].any()), "embers never crossed"
 
 
 def test_fire_will_not_light_where_there_is_nothing_to_burn():

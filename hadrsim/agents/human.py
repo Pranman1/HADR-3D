@@ -60,7 +60,7 @@ class PanicParams:
     smoke_stress: float = 1.5    # smoke density that counts as fully alarming
     time_stress_s: float = 90.0  # how long before the situation alone is stressful
     gamma_floor: float = 0.05    # nobody in a burning city is perfectly calm
-    perception_m: float = 10.0   # how far the fire can be felt
+    perception_m: float = 28.0   # how far a fire is frightening from
     instinct_turn: float = 1.1   # how fast a panicked heading wanders, rad/sqrt(s)
     instinct_bias: float = 0.55  # how strongly it is still pulled toward the exit
     smoke_slowdown: float = 0.55 # fraction of speed lost in the thickest smoke

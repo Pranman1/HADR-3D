@@ -813,6 +813,17 @@ leans downwind, and a person who panics and walks out.  No drones yet.
   bins, market stalls and spilled fuel.  Roads now carry a low fuel load rather than
   none, and the fuel map has seven levels — trees, buildings, parks, car parks, bare
   ground, road, water — rather than two.  Only open water is a true barrier.
+- **Embers are what cross the street.**  Contact spread cannot get a fire over eight
+  metres of road, so a fuel map that is otherwise right gives a fire that politely
+  burns one block and stops.  Real urban fires cross firebreaks by throwing burning
+  brands downwind, and that — not creeping — is what makes a conflagration.  Both the
+  *number* of brands and their *range* scale with wind: getting only the range from
+  the wind makes a still-air fire shower embers evenly in all directions and step
+  over a firebreak it should never cross.
+- **A perception radius short enough to keep panic honest makes a burning block
+  fifty metres away unalarming.**  The opposite failure to saturation, and just as
+  wrong.  Panic now grades with distance — 0.05 with no fire, 0.19 at 22 m, 0.50 at
+  12 m, 0.77 at 3 m — and that gradient is a test.
 - **A one-square-metre ignition is a coin toss.**  It burns out in seconds having
   had a handful of chances to catch, so whether there is a fire at all comes down to
   luck.  Fires are lit as a patch, because a real one is not noticed until it is
@@ -828,6 +839,17 @@ leans downwind, and a person who panics and walks out.  No drones yet.
 - **A cache keyed on the bounding box alone serves stale data.**  Adding street
   trees to the query returned the old response, which has none, so the new code
   looked broken rather than out of date.  The key now includes the query.
+
+**The paper's fire, confirmed from its source** (`firegrid/firegrid_env.py:125`):
+four neighbours, `fire_prob=0.01` per neighbour per step, and `_is_valid` checks the
+map bounds *and nothing else*.  So it ignores buildings, roads and terrain entirely,
+has no fuel and no burnout, never goes out, and grows monotonically until it fills
+the map.  Ours has to earn its growth against real geometry -- but it does have to
+grow, and getting the fuel map right made it stop growing at all until embers were
+added.  Spread rate is a scenario parameter, not a property of the model:
+`FireParams.paper()` restores the published behaviour for `paper_parity`, and the
+defaults, which would consume a 25 m block in seconds, are tuned for a real city
+over a two-minute episode.
 
 **One thing worth saying plainly about scenarios.**  Where the person starts, where
 safety is, and where the fire is lit are *not* part of the model.  The paper

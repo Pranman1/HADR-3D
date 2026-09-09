@@ -21,6 +21,20 @@ fix is one line of state:
 Wind makes it directional: spread downwind is boosted and upwind suppressed, which
 is the single biggest determinant of where a real fire goes.
 
+**Embers cross the street.**  Cell-to-cell contact alone cannot get a fire over an
+eight-metre road, so a fuel model that is otherwise right produces a fire that
+politely burns one block and stops.  Real urban fires cross firebreaks by throwing
+burning brands downwind, and that -- not creeping contact -- is what turns a
+building fire into a conflagration.  So burning cells also seed ignitions at range,
+downwind, at low probability.
+
+**What the paper does, for comparison** (`firegrid/firegrid_env.py:125`): four
+neighbours, `fire_prob=0.01`, no fuel, no burnout, and `_is_valid` checks the map
+bounds and nothing else -- so its fire ignores buildings, roads and terrain
+entirely, never goes out, and grows until it fills the map.  Ours has to earn its
+growth against real geometry, which is the point, but it does have to actually
+grow.
+
 The fire keeps its own clock.  It ticks at `fire_hz` regardless of how often it is
 stepped, so the same scenario burns the same way whether the caller runs at 100 Hz
 or 2 Hz.  Without that, changing the control rate would silently change the fire.
@@ -48,12 +62,38 @@ NEIGHBOURS = (
 
 @dataclass
 class FireParams:
-    spread_prob: float = 0.06      # per tick, per neighbour, no wind, dry fuel
+    spread_prob: float = 0.09      # per tick, per neighbour, no wind, dry fuel
     wind_boost: float = 2.5        # how much a full downwind alignment multiplies it
     wind_ref_mps: float = 5.0      # the speed at which `wind_boost` is reached
-    burn_rate: float = 0.05        # fuel consumed per second while burning
+    burn_rate: float = 0.025       # fuel consumed per second while burning
     moisture_damping: float = 0.9  # how strongly moisture suppresses ignition
     fire_hz: float = 1.0           # spread attempts per second
+
+    # Fuel decides how readily a cell takes, but not proportionally: a street with
+    # trees and parked cars carries fire at a fifth the load of a building and
+    # nothing like a fifth the rate.  The exponent softens that, so light fuel slows
+    # a fire rather than stopping it dead.
+    fuel_reference: float = 1.0
+    fuel_exponent: float = 0.4
+
+    # Brands thrown downwind. Small probability, long range: this is what gets a
+    # fire across a road, and without it a correct fuel map produces a fire that
+    # burns one block and stops.
+    spot_prob: float = 0.020
+    spot_range_m: float = 14.0
+    spot_spread_m: float = 7.0
+
+    @classmethod
+    def paper(cls) -> "FireParams":
+        """The 2D paper's fire, for `paper_parity`.
+
+        `fire_prob=0.01` on four neighbours, no embers.  These defaults are tuned for
+        a real city block over a two-minute episode and would consume the paper's
+        entire 25 m map in seconds, which is not a bug in either -- spread rate is a
+        property of the scenario, not of the model.
+        """
+        return cls(spread_prob=0.01, spot_prob=0.0, burn_rate=0.0,
+                   wind_boost=1.0, fuel_exponent=0.0)
 
 
 class Fire:
@@ -197,13 +237,47 @@ class Fire:
             src = _shift(burning, dx, dy)
             survive = survive * (1.0 - weights[:, k, None, None] * src)
 
+        # Embers, which is how a fire gets across a road.
+        survive = survive * (1.0 - self._spotting(burning, wind))
+
         # Fuel and moisture decide whether an attempt takes hold.
         receptive = (self.fuel > 0) & (self.state == UNBURNT)
         damp = 1.0 - self.p.moisture_damping * self.moisture.clamp(0, 1)
-        p_ignite = (1.0 - survive) * damp * self.fuel.clamp(0, 1)
+        p_ignite = (1.0 - survive) * damp * self._receptivity()
 
         lit = rng.bernoulli(p_ignite.clamp(0, 1)) & receptive
         self.state = torch.where(lit, torch.full_like(self.state, BURNING), self.state)
+
+    def _receptivity(self) -> torch.Tensor:
+        """How readily a cell takes, given what is on it. Sub-linear in fuel."""
+        ratio = (self.fuel / self.p.fuel_reference).clamp(0.0, 1.0)
+        return ratio ** self.p.fuel_exponent
+
+    def _spotting(self, burning: torch.Tensor, wind: Wind) -> torch.Tensor:
+        """Ignition probability from brands blown downwind.
+
+        The plume carries burning debris ahead of the front, so the ember field is
+        the burning cells shifted downwind and spread out -- the same construction as
+        the smoke, for the same reason.
+
+        **How many brands, and how far, both scale with the wind.**  Getting only the
+        distance from the wind and leaving the rate fixed means a still-air fire
+        showers embers evenly in every direction and steps over a firebreak it should
+        never cross.  Still air makes fires creep; wind makes them run and jump.
+        """
+        from hadrsim.world.smoke import _blur, _translate
+
+        cell = self.terrain.cell_size_m
+        reach = (wind.speed.to(self.device) / self.p.wind_ref_mps).clamp(0.0, 1.5)
+        if float(reach.max()) < 1e-3:
+            return torch.zeros_like(burning)
+
+        offset = wind.direction().to(self.device) * (self.p.spot_range_m * reach)[:, None] / cell
+        sigma = max(float(self.p.spot_spread_m * reach.max()) / cell, 0.5)
+
+        seeded = _translate(burning[:, None], offset)
+        rate = (self.p.spot_prob * reach)[:, None, None, None]
+        return (rate * _blur(seeded, sigma))[:, 0]
 
     def _direction_weights(self, wind: Wind) -> torch.Tensor:
         """Per-environment spread probability in each of the eight directions.

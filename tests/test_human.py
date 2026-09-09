@@ -136,6 +136,39 @@ def test_panic_rises_near_a_fire_and_stays_low_away_from_one():
     assert peaks["near"] > peaks["far"] + 0.15, peaks
 
 
+def test_panic_grades_with_distance_to_the_fire():
+    """Not just "near is worse than far" -- it has to be a gradient.
+
+    A perception radius short enough to keep panic honest also makes a burning city
+    block fifty metres away completely unalarming, which is the opposite failure to
+    the saturation this file's other test guards.
+    """
+    t = rust25()
+    peaks = []
+    for ignite in (None, (22, 22), (12, 12), (4, 4)):
+        rng = Rng(0)
+        fire, smoke = fire_mod.Fire(t, 4), smoke_mod.Smoke(t, 4)
+        w = wind_mod.still(4)
+        h = Human(t, 4)
+        if ignite:
+            fire.reset(torch.tensor([list(ignite)] * 4), radius_m=2.5)
+        h.reset(torch.tensor([[2.5, 2.5]] * 4), torch.tensor([[22.5, 24.5]] * 4))
+        held = h.pos.clone()
+        peak = torch.zeros(4)
+        for _ in range(120):
+            fire.step(0.1, w, rng)
+            smoke.update(fire, w)
+            h.desired_velocity(fire, smoke, rng, 0.1)
+            h.pos = held.clone()               # stand still; measure panic alone
+            peak = torch.maximum(peak, h.gamma)
+        peaks.append(float(peak.mean()))
+
+    none, far, mid, near = peaks
+    assert none < 0.15, f"nothing burning should not be frightening: {none:.2f}"
+    assert none < far < mid < near, f"panic must grade with distance: {peaks}"
+    assert near > 0.6, f"a fire three metres away should be terrifying: {near:.2f}"
+
+
 def test_panic_does_not_saturate_on_a_distant_fire():
     """Blurring the fire measures how *much* there is, not how *close* -- and on a
     small map that pins panic at one wherever you stand."""
@@ -243,7 +276,26 @@ def test_speed_is_capped():
 # ---------------------------------------------------------------- reproducible
 
 def test_same_seed_same_walk():
-    a = walk_out(rust25(), batch=8, seed=4, ignite=(5, 18))
-    b = walk_out(rust25(), batch=8, seed=4, ignite=(5, 18))
-    assert a == b
-    assert a != walk_out(rust25(), batch=8, seed=5, ignite=(5, 18))
+    """Reproducibility, checked on the trajectory rather than on the summary.
+
+    Comparing the returned means is a trap: with a fierce fire on a 25 m map nobody
+    gets out, both runs summarise to (0.0, nan), and `nan != nan` fails a test that
+    should pass -- while telling you nothing about whether the walk was identical.
+    """
+    def final_positions(seed):
+        t = rust25()
+        rng = Rng(seed)
+        fire, smoke = fire_mod.Fire(t, 8), smoke_mod.Smoke(t, 8)
+        w = wind_mod.still(8)
+        h, crowd = Human(t, 8), Crowd(t)
+        fire.reset(torch.tensor([[5, 18]] * 8))
+        h.reset(torch.tensor([[0.5, 0.5]] * 8), torch.tensor([[22.5, 24.5]] * 8))
+        for _ in range(60):
+            fire.step(DT, w, rng)
+            smoke.update(fire, w)
+            h.integrate(crowd.step(h.pos, h.vel,
+                                   h.desired_velocity(fire, smoke, rng, DT), DT), DT)
+        return h.pos.clone()
+
+    assert torch.equal(final_positions(4), final_positions(4))
+    assert not torch.equal(final_positions(4), final_positions(5))
