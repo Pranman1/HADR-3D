@@ -99,27 +99,42 @@ def log_terrain(terrain, path: str = "/world/terrain") -> None:
 
 
 def _log_footprints(path: str, footprints) -> None:
-    """Real buildings, merged into one mesh per kind so the viewer stays responsive."""
-    from hadrsim.viz import mesh
+    """Real buildings, merged into one mesh per kind so the viewer stays responsive.
 
-    for kind, colour in (("solid", C_SOLID), ("canopy", C_CANOPY)):
-        pieces = [
-            mesh.extrude(f.xy.cpu().numpy().astype(np.float64), f.base_m, f.top_m)
-            for f in footprints
-            if f.kind == kind
-        ]
-        verts, faces = mesh.merge(pieces)
-        if len(verts) == 0:
+    Colour comes from each building's own OSM tags, and the window pattern from one
+    atlas shared by the whole city -- so a few hundred buildings are still two mesh
+    objects and one image.
+    """
+    from hadrsim.viz import facade, mesh
+
+    for kind in ("solid", "canopy"):
+        pieces, colours = [], []
+        for i, f in enumerate(x for x in footprints if x.kind == kind):
+            v, t, uv = mesh.extrude(
+                f.xy.cpu().numpy().astype(np.float64), f.base_m, f.top_m, uv=True
+            )
+            if len(v) == 0:
+                continue
+            pieces.append((v, t, uv))
+            # Seeded by the outline, so a building keeps its colour between runs.
+            seed = hash((round(float(f.xy[0, 0]), 2), round(float(f.xy[0, 1]), 2), i))
+            base = np.array(facade.colour_for(f.tags or {}, seed=seed), dtype=float)
+            # Darken toward the ground: cheap ambient occlusion, and it makes a
+            # skyline read as a skyline instead of a flat slab of grey.
+            lift = 0.72 + 0.28 * np.clip(v[:, 2] / 40.0, 0, 1)
+            colours.append((base * lift[:, None]).clip(0, 255).astype(np.uint8))
+
+        if not pieces:
             continue
-        # Shade by height so a skyline reads as a skyline rather than a grey slab.
-        hi = max(float(verts[:, 2].max()), 1.0)
-        shade = 0.55 + 0.45 * (verts[:, 2] / hi)
+        verts, faces, uvs = mesh.merge(pieces)
         rr.log(
             f"{path}/{kind}",
             rr.Mesh3D(
                 vertex_positions=verts,
                 triangle_indices=faces,
-                vertex_colors=(np.array(colour) * shade[:, None]).clip(0, 255).astype(np.uint8),
+                vertex_texcoords=uvs,
+                albedo_texture=facade.window_atlas(),
+                vertex_colors=np.concatenate(colours),
             ),
         )
 

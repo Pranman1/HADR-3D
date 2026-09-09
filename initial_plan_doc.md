@@ -202,14 +202,15 @@ envs/
   train.py         250   the fast environment
   exec_ros.py      200   the real-time ROS 2 environment
 viz/
-  rerun_sink.py    120   drawing. Used by BOTH environments                     [86]
-  mesh.py           80   building outlines -> triangles, for drawing only       [72]
-  isaac_bridge.py  150   photoreal, last milestone only
+  rerun_sink.py    120   drawing. Used by BOTH environments                     [93]
+  mesh.py          110   building outlines -> triangles and texture coords     [103]
+  facade.py         90   building colour and the shared window atlas            [83]
+  isaac_bridge.py  150   photoreal (step 5), real meshes not procedural
 policy/
   encoders.py      120   how the network reads its input (plain | CNN)
   ppo.py           150   the training loop
   ────────────────────
-  total          ~3,360        built so far: 605 code lines, 39 tests passing
+  total          ~3,450        built so far: 679 code lines, 54 tests passing
 ```
 
 **Five rules that keep it there**
@@ -263,6 +264,29 @@ downtown, and two skylines, each coming out as itself.
   and almost none carry `height`, so most heights are inferred at 3 m per storey.
   This is the least trustworthy thing in the world layer and it is worth remembering
   when a result depends on altitude.
+
+### How buildings are drawn
+
+Colour comes from `building=<type>`, not from colour tags.  Surveying the cached
+extracts finds **zero** `building:colour` tags and six `building:material`, against
+30-odd distinct `building=*` values on nearly every outline -- so a type palette is
+the thing that actually pays.  Explicit colour and material are honoured where
+present, which is rarely.
+
+Windows come from one shared atlas: a 128 x 128 grid of window bays, with each wall
+mapping into a corner of it.  A building of 8 floors and 12 bays uses u in [0, 12/128],
+v in [0, 8/128].  The whole city is therefore two mesh objects and one image, and
+nothing depends on the renderer repeating texture coordinates outside [0, 1].
+
+**None of this is visible to the simulation.**  Occlusion, fire and movement all read
+the grid; the policy never sees pixels.  It exists because a city of identical grey
+blobs is hard to read, and being able to see what you built is how you notice it is
+wrong -- which is exactly how the canopy-height bug above was caught.
+
+**Photoreal buildings are deferred to step 5**, where they earn their place: rendering
+camera images to train the frozen detector, and the demo.  That means real meshes and
+textures (USD assets via Isaac Sim), not a procedural facade, and it is the only point
+at which visual fidelity converts into a number.
 
 **It does not replace `paper_parity`.**  A real city is a different scenario file, not
 a different simulator.  `paper_parity.yaml` keeps the 25 x 25 grid, because comparing
