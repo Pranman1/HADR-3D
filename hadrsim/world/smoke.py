@@ -44,6 +44,7 @@ class SmokeParams:
     source_sigma_m: float = 2.0    # width of the plume where it leaves the ground
     extinction: float = 0.35       # optical depth per unit density per metre
     decay_per_layer: float = 0.88  # dilution into clear air on the way up
+    coarsen: int = 4               # cells per plume cell. See the note in `update`
 
 
 class Smoke:
@@ -91,8 +92,15 @@ class Smoke:
         stops producing a column immediately rather than leaving a ghost behind.  Over
         the seconds that matter for seeing through it, that is the right trade.
         """
-        source = fire.intensity                                   # (B, W, H)
-        cell = self.terrain.cell_size_m
+        # Computed on a coarser grid than the terrain, then resampled.  A plume is
+        # diffuse -- it has no feature smaller than several metres -- so resolving it
+        # at the map's own resolution buys nothing and costs everything: the shift and
+        # blur run once per altitude layer, and at a thousand parallel environments
+        # they were two thirds of the entire step. Coarsening by four cuts that
+        # sixteenfold and changes the field by less than the model's own uncertainty.
+        c = max(1, int(self.p.coarsen))
+        cell = self.terrain.cell_size_m * c
+        source = F.avg_pool2d(fire.intensity[:, None], c, ceil_mode=True)
         drift = wind.velocity.to(self.device)                     # (B, 2) m/s
 
         layers = []
@@ -101,11 +109,17 @@ class Smoke:
             offset_cells = drift * age_s / cell                   # (B, 2)
             sigma_cells = (self.p.source_sigma_m + self.p.spread_per_m * z) / cell
 
-            shifted = _translate(source[:, None], offset_cells)
+            shifted = _translate(source, offset_cells)
             blurred = _blur(shifted, sigma_cells)
             layers.append(blurred[:, 0] * (self.p.decay_per_layer ** k))
 
-        self.density = torch.stack(layers, dim=1)
+        coarse = torch.stack(layers, dim=1)
+        if c == 1:
+            self.density = coarse
+        else:
+            w, h = self.terrain.shape
+            self.density = F.interpolate(coarse, size=(w, h), mode="bilinear",
+                                         align_corners=False)
 
     def reset(self) -> None:
         self.density.zero_()

@@ -61,6 +61,7 @@ class Scenario:
     human_goal: list | None = None
     fire_at: list | None = None           # [x, y]
     fire_radius_m: float = 2.5
+    drone_start: list | None = None       # [x, y] launch point, shared by the team
 
     episode_seconds: float = 120.0
     policy: str = "none"                  # checkpoint name, once there is one
@@ -96,11 +97,17 @@ class Scenario:
 
     @classmethod
     def preset(cls, name: str, **overrides) -> "Scenario":
+        """A named place, with anything explicitly passed taking precedence.
+
+        The preset's radius is a default rather than a fixture: training wants a
+        smaller extract than a demo does, and having to remember which presets
+        already set which fields is exactly the friction presets exist to remove.
+        """
         place, radius = PRESETS[name]
+        fields = {"place": place, "radius_m": radius}
         if place is None:
-            return cls(place=None, paper_map="maps/rust25.yaml", radius_m=0.0,
-                       **overrides)
-        return cls(place=place, radius_m=radius, **overrides)
+            fields = {"place": None, "paper_map": "maps/rust25.yaml", "radius_m": 0.0}
+        return cls(**{**fields, **overrides})
 
 
 def autoplace(sc: Scenario) -> Scenario:
@@ -140,6 +147,16 @@ def autoplace(sc: Scenario) -> Scenario:
         reachable = t.walkable & (from_start < nav.UNREACHABLE / 2)
         goal_cell = reachable.nonzero()[(from_start[reachable] - budget).abs().argmin()]
         sc.human_goal = [(goal_cell.float() * cell).tolist()] * len(sc.human_start)
+
+    if sc.drone_start is None:
+        # A launch point, not the person's doorstep.  The paper puts the rescuers at a
+        # fixed base near the middle of the map while the evacuee starts on the
+        # perimeter; starting them on top of each other makes the task trivial and a
+        # policy that captures on the first step has learned nothing about searching.
+        w, h = t.shape
+        centre = torch.tensor([w * 0.5, h * 0.5])
+        sc.drone_start = (walk[(walk.float() - centre).norm(dim=1).argmin()].float()
+                          * cell).tolist()
 
     if sc.fire_at is None:
         goal_cell = (torch.tensor(sc.human_goal[0]) / cell).long()

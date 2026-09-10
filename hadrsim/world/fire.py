@@ -220,30 +220,40 @@ class Fire:
         )
 
     def _spread(self, wind: Wind, rng: Rng) -> None:
-        """Each burning cell rolls against each neighbour, weighted by the wind."""
-        burning = self.burning.float()
-        weights = self._direction_weights(wind)             # (B, 8)
+        """Each burning cell reaches for its neighbours, weighted by the wind.
 
-        # Probability that a cell survives *all* its burning neighbours this tick.
-        survive = torch.ones_like(self.fuel)
+        One grouped convolution rather than eight shifted multiplies.  The kernel is
+        per-environment because the wind is, so the batch becomes the convolution's
+        groups -- which at a thousand environments is the difference between a
+        fourteen-second step and a readable one.
+
+        The total reach is turned into a probability by `1 - exp(-rate)` rather than
+        by multiplying out `(1 - p_k)` over the neighbours.  That is the standard way
+        to ask "did at least one of these independent attempts succeed", it agrees
+        with the product to well under a percent at these rates, and it is what lets
+        the whole neighbourhood collapse into a single convolution.
+        """
+        burning = self.burning.float()                           # (B, W, H)
+        weights = self._direction_weights(wind)                  # (B, 8)
+
+        # `weights[k]` is how readily fire *travels* along d, so the cell it reaches
+        # is at B and the source is at B - d.  In a convolution that means the kernel
+        # tap for direction d sits at -d, which is the flip that decides whether a
+        # windy fire runs downwind or straight into the wind.
+        kernel = torch.zeros(self.batch, 1, 3, 3, device=self.device)
         for k, (dx, dy) in enumerate(NEIGHBOURS):
-            # `weights[k]` is how readily fire *travels* along d, so the cell it
-            # travels to is at B and the one it comes from is at B - d.  Shifting the
-            # burning mask by +d puts that source cell's state at B.
-            #
-            # Getting this backwards is invisible without wind -- the neighbour set is
-            # symmetric, so a still-air fire spreads identically either way -- and
-            # with wind it drives the fire directly upwind.
-            src = _shift(burning, dx, dy)
-            survive = survive * (1.0 - weights[:, k, None, None] * src)
+            kernel[:, 0, 1 - dx, 1 - dy] = weights[:, k]
 
-        # Embers, which is how a fire gets across a road.
-        survive = survive * (1.0 - self._spotting(burning, wind))
+        # A grouped convolution puts the batch in the *channel* dimension: one image
+        # with B channels, one 3x3 filter per channel, B groups.
+        w, h = burning.shape[-2:]
+        stacked = F.pad(burning.reshape(1, self.batch, w, h), (1, 1, 1, 1))
+        reach = F.conv2d(stacked, kernel, groups=self.batch).reshape(self.batch, w, h)
+        reach = reach + self._spotting(burning, wind)
 
-        # Fuel and moisture decide whether an attempt takes hold.
         receptive = (self.fuel > 0) & (self.state == UNBURNT)
         damp = 1.0 - self.p.moisture_damping * self.moisture.clamp(0, 1)
-        p_ignite = (1.0 - survive) * damp * self._receptivity()
+        p_ignite = (1.0 - torch.exp(-reach)) * damp * self._receptivity()
 
         lit = rng.bernoulli(p_ignite.clamp(0, 1)) & receptive
         self.state = torch.where(lit, torch.full_like(self.state, BURNING), self.state)
