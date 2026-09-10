@@ -55,6 +55,7 @@ class View:
     new_area: torch.Tensor | None = None    # (B,) fraction of map newly searched
     newly_seen: torch.Tensor | None = None  # (B,) spotted for the first time this step
     time_left: torch.Tensor | None = None   # (B,) 1 at the start, 0 at the deadline
+    belief_age: torch.Tensor | None = None  # (B,) seconds since the last sighting
 
     def _or_zero(self, field) -> torch.Tensor:
         v = getattr(self, field)
@@ -98,17 +99,29 @@ def evacuee_in_llr_fov(v: View) -> torch.Tensor:
     return v.seen_by[:, 1].float() * v.confidence
 
 
+PROXIMITY_SCALE_M = 25.0
+BELIEF_HALFLIFE_S = 12.0
+
+
 def proximity(v: View) -> torch.Tensor:
     """Paper's l2: the low rescuer closing on the person.
 
-    Only paid when somebody can see them.  Rewarding closeness to a *believed*
-    position nobody is currently looking at pays a policy for converging on a stale
-    guess, which is a slow and convincing way to learn the wrong thing.
+    Paid against the team's *last known* position, discounted by how stale that is,
+    rather than only while somebody currently has eyes on.
+
+    Paying only for live sightings looks like the careful choice and is the wrong
+    one: a searcher who glimpses somebody and then loses them earns nothing at all
+    for going where they just were, which is exactly the moment the incentive should
+    be strongest.  Discounting by age is what separates "go and look where they were
+    ten seconds ago", which is correct, from "converge forever on a two-minute-old
+    guess", which is what the strict version was guarding against.
     """
     if v.n_drones < 2:
         return torch.zeros(v.batch, device=v.drone_pos.device)
+    age = v._or_zero("belief_age")
+    trust = torch.pow(torch.tensor(0.5, device=age.device), age / BELIEF_HALFLIFE_S)
     distance = (v.drone_pos[:, 1] - v.person_pos).norm(dim=-1)
-    return torch.exp(-distance / 20.0) * v.person_seen.float()
+    return torch.exp(-distance / PROXIMITY_SCALE_M) * trust
 
 
 def goal_progress(v: View) -> torch.Tensor:

@@ -68,6 +68,29 @@ class Drone:
             from hadrsim.agents.autopilot import Autopilot
             self._autopilot = Autopilot(airframe, batch, self.device)
 
+    def confine(self, x_max: float, y_max: float,
+                alt_min: float = 2.0, alt_max: float = 120.0) -> None:
+        """A geofence: the box the aircraft is allowed to be in.
+
+        Real drones have all of this -- ground underneath, a regulatory ceiling
+        (120 m almost everywhere), and an operator-set boundary -- so it is missing
+        physics rather than a training convenience.
+
+        It also closes a degenerate solution the environment was otherwise offering:
+        with nothing stopping it, a policy learned to hold full vertical command and
+        fly one drone to 286 metres *underground* and the other to 332 metres up,
+        where neither can see anything and neither is scored on anything.  It is a
+        perfectly good answer to the question that was actually being asked.
+
+        Velocity into a limit is zeroed rather than kept, so an aircraft pinned to
+        the fence stops pressing on it instead of accumulating speed it can never use.
+        """
+        low = torch.tensor([0.0, 0.0, alt_min], device=self.device)
+        high = torch.tensor([x_max, y_max, alt_max], device=self.device)
+        clamped = torch.maximum(torch.minimum(self.pos, high), low)
+        self.vel = torch.where(clamped != self.pos, torch.zeros_like(self.vel), self.vel)
+        self.pos = clamped
+
     def _geometry(self) -> None:
         """Where the rotors are, and how their thrust becomes force and torque."""
         import math

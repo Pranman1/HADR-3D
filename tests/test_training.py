@@ -104,12 +104,40 @@ def test_rewards_only_read_what_the_team_believes():
 
 
 def test_terms_that_need_a_sighting_pay_nothing_without_one():
+    """Everything that reports on a live sighting must go quiet without one."""
     blind = view(person_seen=torch.zeros(1, dtype=torch.bool),
                  seen_by=torch.zeros(1, 2, dtype=torch.bool),
                  confidence=torch.zeros(1))
-    for name in ("proximity", "role_coordination", "search_coverage",
+    for name in ("role_coordination", "search_coverage",
                  "evacuee_in_hlr_fov", "evacuee_in_llr_fov"):
-        assert float(ALL[name](blind)[0]) == 0.0, f"{name} paid for a stale guess"
+        assert float(ALL[name](blind)[0]) == 0.0, f"{name} paid without a sighting"
+
+
+def test_closing_on_a_remembered_position_still_pays_but_decays():
+    """Proximity is the deliberate exception, and it has to be.
+
+    Paying only for live sightings means a searcher who glimpses somebody and loses
+    them earns nothing for going where they just were -- the exact moment the
+    incentive should be strongest.  Discounting by age separates that from
+    converging forever on a two-minute-old guess.
+    """
+    blind = dict(person_seen=torch.zeros(1, dtype=torch.bool),
+                 seen_by=torch.zeros(1, 2, dtype=torch.bool),
+                 confidence=torch.zeros(1))
+    fresh = float(ALL["proximity"](view(belief_age=torch.tensor([0.0]), **blind))[0])
+    recent = float(ALL["proximity"](view(belief_age=torch.tensor([12.0]), **blind))[0])
+    ancient = float(ALL["proximity"](view(belief_age=torch.tensor([120.0]), **blind))[0])
+
+    assert fresh > recent > ancient, "staleness must reduce what a memory is worth"
+    assert recent == pytest.approx(fresh / 2, rel=0.05), "one half-life, half the value"
+    assert ancient < 0.01, "a two-minute-old guess is worth nothing"
+
+    # And it still rewards being close rather than far.
+    near = ALL["proximity"](view(belief_age=torch.tensor([0.0]), **blind))
+    far = ALL["proximity"](view(belief_age=torch.tensor([0.0]),
+                                drone_pos=torch.tensor([[[0.0, 0.0, 40.0],
+                                                         [90.0, 0.0, 3.0]]]), **blind))
+    assert float(near[0]) > float(far[0])
 
 
 def test_coordination_rewards_a_division_of_labour():

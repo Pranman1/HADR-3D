@@ -51,6 +51,9 @@ HLR, LLR = 0, 1
 class TrainEnv:
     """A batch of independent episodes sharing one city."""
 
+    ALT_MIN = 2.0        # the ground
+    ALT_MAX = 120.0      # the regulatory ceiling almost everywhere
+
     def __init__(self, scenario, batch: int = 256, detector: str = "oracle",
                  fidelity: str = "point_mass", weights: dict | None = None,
                  device="cpu"):
@@ -123,6 +126,8 @@ class TrainEnv:
         self.searched = torch.zeros(self.batch, *self.terrain.shape, device=self.device)
         self._new_area = torch.zeros(self.batch, device=self.device)
         self._first_seen = torch.full((self.batch,), -1.0, device=self.device)
+        self._last_pos = torch.zeros(self.batch, 3, device=self.device)
+        self._last_age = torch.full((self.batch,), 1e3, device=self.device)
         return self.observe()
 
     # ------------------------------------------------------------- perception
@@ -148,7 +153,20 @@ class TrainEnv:
         pos = torch.stack([d.position[:, 0] for d in detections], 1)        # (B, D, 3)
         best = conf.argmax(-1)
         rows = torch.arange(self.batch, device=self.device)
-        return pos[rows, best], conf.max(-1).values, conf > 0
+        fresh, strength = pos[rows, best], conf.max(-1).values
+
+        # Remember the last sighting, and how long ago it was.
+        #
+        # The contract has carried an `age` on every detection since the first commit
+        # and nothing ever filled it in, so a policy that lost sight of somebody was
+        # told only "nothing here" -- indistinguishable from never having seen them.
+        # A searcher's most valuable piece of information is where the person was ten
+        # seconds ago, and it was being discarded every step.
+        seen = strength > 0
+        self._last_pos = torch.where(seen[:, None], fresh, self._last_pos)
+        self._last_age = torch.where(seen, torch.zeros_like(self._last_age),
+                                     self._last_age + self.clock.control_dt)
+        return fresh, strength, conf > 0
 
     def observe(self) -> dict:
         """The contract, per drone. See `core/spec.py`."""
@@ -167,8 +185,14 @@ class TrainEnv:
 
             d = detections[i]
             rel = d.position - drone.pos[:, None, :]
+            age = d.age_s.clone()
+            # When nobody has eyes on right now, slot zero carries the team's memory:
+            # where they were, and how stale that is.
+            stale = (d.confidence[:, 0] <= 0) & (self._last_age < 30.0)
+            rel[:, 0] = torch.where(stale[:, None], self._last_pos - drone.pos, rel[:, 0])
+            age[:, 0] = torch.where(stale, self._last_age, age[:, 0])
             slots = torch.cat([rel, d.velocity, d.confidence[..., None],
-                               d.age_s[..., None]], -1)
+                               (age[..., None] / 30.0).clamp(0, 1)], -1)
 
             mate = torch.cat([other.pos - drone.pos,
                               torch.ones(self.batch, 1, device=self.device),
@@ -258,9 +282,11 @@ class TrainEnv:
     def step(self, actions: torch.Tensor):
         """One policy decision. `actions` is (B, 2, 4). Returns obs, reward, done, info."""
         dt = self.clock.dt
+        w_m, h_m = self.terrain.extent_m
         for _ in range(self.clock.substeps):
             for i, drone in enumerate(self.drones):
                 drone.step(actions[:, i], dt)
+                drone.confine(w_m, h_m, self.ALT_MIN, self.ALT_MAX)
             self.human.integrate(
                 self.crowd.step(self.human.pos, self.human.vel, self._want, dt), dt)
             self.wind.step(dt, self.rng_wind)
@@ -310,8 +336,9 @@ class TrainEnv:
         return View(
             drone_pos=torch.stack([d.pos for d in self.drones], 1),
             drone_vel=torch.stack([d.vel for d in self.drones], 1),
-            person_pos=believed,
+            person_pos=self._last_pos,
             person_seen=seen_by.any(-1),
+            belief_age=self._last_age,
             seen_by=seen_by,
             confidence=confidence,
             goal=goal3,

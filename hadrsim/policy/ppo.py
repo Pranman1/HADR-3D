@@ -89,12 +89,21 @@ class ActorCritic(nn.Module):
         return action, logp, value, state
 
     def evaluate(self, obs: dict, action: torch.Tensor, state=None):
-        mean, value, _ = self(obs, state)
+        """Score an action already taken. Hands the carried state back.
+
+        The state matters far more than it looks.  Evaluating each step from a
+        *fresh* recurrent state scores a different policy from the one that acted --
+        one with no memory of the episode so far -- so the importance ratio PPO is
+        built on compares two unrelated things, and every update is noise.  The
+        rollout has to be replayed in order, carrying state, which is why this
+        returns it.
+        """
+        mean, value, state = self(obs, state)
         std = self.log_std.exp().view(1, self.n_drones, spec.ACTION_DIM)
         dist = torch.distributions.Normal(mean, std)
         raw = torch.atanh(action.clamp(-0.999, 0.999))
         logp = (dist.log_prob(raw) - torch.log1p(-action.pow(2) + 1e-6)).sum((-1, -2))
-        return logp, value, dist.entropy().sum((-1, -2))
+        return logp, value, dist.entropy().sum((-1, -2)), state
 
 
 class PPO:
@@ -117,6 +126,8 @@ class PPO:
         """Run the environment forward, keeping what the update needs."""
         buf = {k: [] for k in ("obs", "action", "logp", "value", "reward", "done")}
         info = {}
+        # The recurrent state this rollout began from, so the update can replay it.
+        start_state = None if self.state is None else tuple(h.detach() for h in self.state)
         for _ in range(self.cfg.horizon):
             action, logp, value, self.state = self.net.act(self.obs, self.state)
             nxt, reward, done, info = self.env.step(action)
@@ -133,7 +144,7 @@ class PPO:
                 self.obs = self.env.reset()
                 self.state = None
         _, last_value, _ = self.net(self.obs, self.state)
-        return buf, last_value, info
+        return buf, last_value, info, start_state
 
     def advantages(self, buf, last_value):
         """Generalised advantage estimate, walked backwards through the rollout."""
@@ -155,38 +166,53 @@ class PPO:
 
     # ---------------------------------------------------------------- update
 
-    def update(self, buf, adv, returns) -> dict:
+    def update(self, buf, adv, returns, start_state=None) -> dict:
+        """Replay the rollout in order, carrying recurrent state, and clip.
+
+        One backward pass over the whole sequence rather than one per timestep.  The
+        recurrent state ties the steps together, so they are not independent samples
+        and cannot be stepped on individually without severing the very connection
+        the LSTM exists to make.
+        """
         cfg = self.cfg
         actions = torch.stack(buf["action"])
         old_logp = torch.stack(buf["logp"])
         normalised = (adv - adv.mean()) / (adv.std() + 1e-8)
+        alive = 1.0 - torch.stack(buf["done"])
 
         stats = {}
         for _ in range(cfg.epochs):
+            state = None if start_state is None else tuple(h.clone() for h in start_state)
+            losses = []
             for t in range(len(actions)):
-                logp, value, entropy = self.net.evaluate(buf["obs"][t], actions[t])
+                logp, value, entropy, state = self.net.evaluate(
+                    buf["obs"][t], actions[t], state)
                 ratio = (logp - old_logp[t]).exp()
                 clipped = ratio.clamp(1 - cfg.clip, 1 + cfg.clip)
                 policy_loss = -torch.min(ratio * normalised[t],
                                          clipped * normalised[t]).mean()
                 value_loss = (value - returns[t]).pow(2).mean()
-                loss = (policy_loss + cfg.value_coef * value_loss
-                        - cfg.entropy * entropy.mean())
+                losses.append(policy_loss + cfg.value_coef * value_loss
+                              - cfg.entropy * entropy.mean())
+                # An episode boundary ends the memory. Carrying it across teaches the
+                # policy to remember something that never happened.
+                state = tuple(h * alive[t].view(1, -1, 1) for h in state)
 
-                self.opt.zero_grad()
-                loss.backward()
-                nn.utils.clip_grad_norm_(self.net.parameters(), cfg.max_grad_norm)
-                self.opt.step()
-                stats = {"policy_loss": policy_loss.item(), "value_loss": value_loss.item(),
-                         "entropy": entropy.mean().item()}
+            loss = torch.stack(losses).mean()
+            self.opt.zero_grad()
+            loss.backward()
+            nn.utils.clip_grad_norm_(self.net.parameters(), cfg.max_grad_norm)
+            self.opt.step()
+            stats = {"policy_loss": policy_loss.item(), "value_loss": value_loss.item(),
+                     "entropy": entropy.mean().item()}
         return stats
 
     def train(self, iterations: int, log_every: int = 5, on_log=None) -> list:
         history = []
         for i in range(1, iterations + 1):
-            buf, last_value, info = self.collect()
+            buf, last_value, info, start_state = self.collect()
             adv, returns = self.advantages(buf, last_value)
-            stats = self.update(buf, adv, returns)
+            stats = self.update(buf, adv, returns, start_state)
 
             row = {
                 "iteration": i,
