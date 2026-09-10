@@ -120,6 +120,9 @@ class TrainEnv:
         self.captured = torch.zeros(self.batch, dtype=torch.bool, device=self.device)
         self._want = torch.zeros(self.batch, 2, device=self.device)
         self._fire_near = nav.proximity(self.fire.intensity, 12.0, self.cell)
+        self.searched = torch.zeros(self.batch, *self.terrain.shape, device=self.device)
+        self._new_area = torch.zeros(self.batch, device=self.device)
+        self._first_seen = torch.full((self.batch,), -1.0, device=self.device)
         return self.observe()
 
     # ------------------------------------------------------------- perception
@@ -183,6 +186,38 @@ class TrainEnv:
         return {"hlr": out[HLR], "llr": out[LLR],
                 "believed": believed, "confidence": confidence, "seen_by": seen_by}
 
+    def _sweep(self) -> None:
+        """Mark the ground the drones can currently see as searched.
+
+        Accumulated and slowly forgotten, rather than a snapshot of the current
+        footprint.  The contract calls this channel "where it has already looked" and
+        gives it provenance OWN -- the drone's own memory -- so a snapshot is not what
+        it says it is.  It is also the only thing in the observation that can tell a
+        policy where *not* to bother going.
+
+        Forgetting matters as much as remembering: without decay a policy sweeps the
+        map once, marks everything, and then has no reason ever to look again -- while
+        the person it is hunting has walked somewhere it checked two minutes ago.
+        """
+        decay = 0.995
+        self.searched = self.searched * decay
+        before = self.searched.sum(dim=(1, 2))
+
+        w, h = self.terrain.shape
+        xs = torch.arange(w, device=self.device) * self.cell
+        ys = torch.arange(h, device=self.device) * self.cell
+        gx, gy = torch.meshgrid(xs, ys, indexing="ij")
+
+        for drone, camera in zip(self.drones, self.cameras):
+            reach = fov.ground_footprint(camera, drone.pos, drone.quat)
+            dist = ((gx[None] - drone.pos[:, 0, None, None]) ** 2
+                    + (gy[None] - drone.pos[:, 1, None, None]) ** 2).sqrt()
+            self.searched = torch.maximum(
+                self.searched, (dist <= reach[:, None, None]).float())
+
+        # Fraction of the map newly covered, which is what pays for exploring.
+        self._new_area = (self.searched.sum(dim=(1, 2)) - before).clamp_min(0) / (w * h)
+
     def _raster(self, drone) -> torch.Tensor:
         """The small picture centred on the drone.
 
@@ -209,12 +244,10 @@ class TrainEnv:
         fire = self.fire.intensity[rows, gx[:, :, None], gy[:, None, :]]
         smoke = self.smoke.column_density()[rows, gx[:, :, None], gy[:, None, :]] / 3.0
 
-        # Only what is in the camera footprint. Beyond it the drone has not looked.
-        reach = fov.ground_footprint(self.cameras[0], drone.pos, drone.quat)
-        dist = (torch.stack(torch.meshgrid(offsets, offsets, indexing="ij"), -1)
-                .float().norm(dim=-1)[None] * mpc)
-        looked = (dist <= reach[:, None, None]).float()
-
+        # Fire and smoke are masked to what has actually been looked at. Handing a
+        # policy a perfect hazard map is the same oracle hole as handing it the
+        # person's position.
+        looked = self.searched[rows, gx[:, :, None], gy[:, None, :]]
         return torch.stack([buildings, fire * looked, smoke * looked, looked], 1)
 
     def _time_left(self) -> torch.Tensor:
@@ -238,8 +271,13 @@ class TrainEnv:
         # times a step -- once for the person's panic and once per drone for the
         # reward -- over the whole map each time.
         self._fire_near = nav.proximity(self.fire.intensity, 12.0, self.cell)
+        self.searched = torch.zeros(self.batch, *self.terrain.shape, device=self.device)
+        self._new_area = torch.zeros(self.batch, device=self.device)
+        self._first_seen = torch.full((self.batch,), -1.0, device=self.device)
         self._want = self.human.desired_velocity(
             self.fire, self.smoke, self.rng_human, self.clock.control_dt)
+        self.human.expose_to(self.fire)
+        self._sweep()
 
         # Capture is the low rescuer's job alone -- the high one cannot intercept,
         # which is the asymmetry the whole paper is about.
@@ -250,15 +288,21 @@ class TrainEnv:
         self.human.led_by(llr.pos[:, :2], CAPTURE_RADIUS_M)
 
         obs = self.observe()
-        reward = self.reward(self._view(actions, newly))
+        seen = obs["seen_by"].any(-1)
+        newly_seen = seen & (self._first_seen < 0)
+        self._first_seen = torch.where(newly_seen, self._time_left(), self._first_seen)
+
+        reward = self.reward(self._view(actions, newly, newly_seen))
         self.step_count += 1
 
-        done = (self.step_count >= self.clock.max_steps) | self.human.reached
+        done = ((self.step_count >= self.clock.max_steps)
+                | self.human.reached | self.human.harmed)
         return obs, reward.total, done, {"parts": reward.summary(),
                                          "captured": self.captured,
-                                         "reached": self.human.reached}
+                                         "reached": self.human.reached,
+                                         "harmed": self.human.harmed}
 
-    def _view(self, actions, newly_captured) -> View:
+    def _view(self, actions, newly_captured, newly_seen=None) -> View:
         _, believed, confidence, seen_by = self._last
         goal3 = torch.cat([self.goal, torch.zeros(self.batch, 1, device=self.device)], -1)
         fire_near = torch.stack([nav.sample(self._fire_near, d.pos[:, :2], self.cell)
@@ -277,4 +321,9 @@ class TrainEnv:
             fire_near=fire_near,
             action=actions,
             dt=self.clock.control_dt,
+            harmed=self.human.harmed,
+            new_area=self._new_area,
+            newly_seen=(newly_seen if newly_seen is not None
+                        else torch.zeros_like(self.human.reached)),
+            time_left=self._time_left(),
         )

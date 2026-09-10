@@ -100,6 +100,7 @@ class Human:
         self.gamma = z(batch)
         self.goal = z(batch, 2)
         self.reached = torch.zeros(batch, dtype=torch.bool, device=self.device)
+        self.harmed = torch.zeros(batch, dtype=torch.bool, device=self.device)
         self.following = torch.zeros(batch, dtype=torch.bool, device=self.device)
         self.instinct_dir = z(batch, 2)
         self.elapsed = 0.0
@@ -119,6 +120,7 @@ class Human:
         self.vel.zero_()
         self.gamma.fill_(gamma0)
         self.reached.zero_()
+        self.harmed.zero_()
         self.following.zero_()
         self.elapsed = 0.0
 
@@ -201,6 +203,21 @@ class Human:
         self.pos = self.pos + vel * dt
         self.elapsed += dt
         self.reached |= (self.pos - self.goal).norm(dim=-1) < 1.5
+
+    def expose_to(self, fire) -> None:
+        """Standing in a burning cell hurts.
+
+        Without this there is no way for an evacuation to fail, so there is nothing
+        for a rescuer to prevent: the person strolls through the fire and out the
+        other side, and a policy that does nothing scores as well as one that works.
+        A failure mode is what makes the task a task.
+        """
+        cell = self.terrain.cell_size_m
+        c = (self.pos / cell).long()
+        w, h = fire.burning.shape[-2:]
+        idx = torch.arange(len(self.pos), device=self.device)
+        burning = fire.burning[idx, c[:, 0].clamp(0, w - 1), c[:, 1].clamp(0, h - 1)]
+        self.harmed |= burning & ~self.reached
 
     def led_by(self, rescuer_xy: torch.Tensor, radius_m: float) -> None:
         """A rescuer within `radius_m` picks them up; thick smoke loses them again."""

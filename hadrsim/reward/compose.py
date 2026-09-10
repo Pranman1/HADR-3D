@@ -25,18 +25,32 @@ from hadrsim.reward.terms import ALL, View
 # payment for the capture itself, a small one for merely having eyes on -- without
 # which early episodes are flat and nothing is learned about searching -- and light
 # penalties for fire, effort and time.
+# Balanced by what each term is *worth over an episode*, not by how the numbers read
+# side by side.  Coverage pays a little on every step and proximity pays only once
+# somebody is in sight, so equal-looking weights are nothing like equal: at 30
+# against 1 the team was paid far more for sweeping empty ground than for closing on
+# the person it had already found, and it behaved exactly that way -- the map got
+# thoroughly searched and the capture rate never left zero.
 DEFAULT = {
     "capture": 200.0,
     "reached_safety": 100.0,
     "evacuee_in_hlr_fov": 1.0,
-    "evacuee_in_llr_fov": 1.0,
-    "proximity": 1.0,
+    "evacuee_in_llr_fov": 2.0,
+    "proximity": 20.0,
     "goal_progress": 10.0,
     "role_coordination": 1.0,
     "search_coverage": 0.5,
     "fire_proximity": -1.0,
     "control_effort": -0.01,
     "time_penalty": -0.02,
+
+    # Not the paper's, and needed because the map is not the paper's either.  On a
+    # 25 m block the evacuee is in view from the first step; on a real city block
+    # finding them is the whole problem, so searching has to pay something before
+    # it succeeds.
+    "first_sight": 20.0,
+    "coverage": 10.0,
+    "evacuee_harmed": -100.0,
 }
 
 

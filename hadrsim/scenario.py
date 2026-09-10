@@ -125,15 +125,33 @@ def autoplace(sc: Scenario) -> Scenario:
     walk = t.walkable.nonzero()
 
     if sc.human_start is None:
-        # A quarter of the way in, not in a corner: a corner route on a real extract
-        # runs along the clipped edge, where there is little to burn and less to see.
+        # Somewhere connected to the rest of the city.
+        #
+        # "Any walkable cell a quarter of the way in" is not good enough on a real
+        # extract: it lands in an enclosed courtyard, and then the longest walk
+        # available is seventeen metres.  The evacuee strolls to safety in thirteen
+        # seconds in every episode, the drones are irrelevant, and the whole task
+        # quietly evaporates -- which is exactly what happened, and took a while to
+        # notice because nothing failed.
+        #
+        # So: try a spread of candidates and keep the one that can actually reach the
+        # most of the map.  A handful of distance fields at setup time is nothing
+        # against training against a scenario that is not a scenario.
         w, h = t.shape
-        anchor = torch.tensor([w * 0.28, h * 0.28])
-        first = walk[(walk.float() - anchor).norm(dim=1).argmin()]
+        best, best_reach = None, -1
+        for fx in (0.25, 0.5, 0.75):
+            for fy in (0.25, 0.5, 0.75):
+                anchor = torch.tensor([w * fx, h * fy])
+                seed = walk[(walk.float() - anchor).norm(dim=1).argmin()]
+                d = nav.distance_field(t.walkable, seed[None], cell)[0]
+                reach = int((d < nav.UNREACHABLE / 2).sum())
+                if reach > best_reach:
+                    best, best_reach = seed, reach
+        first = best
         starts = [first]
         # Extra people are scattered near the first, not stacked on top of them.
         for i in range(1, sc.n_humans):
-            offset = anchor + torch.tensor([12.0 * (i % 3 - 1), 12.0 * (i // 3 - 1)])
+            offset = first.float() + torch.tensor([12.0 * (i % 3 - 1), 12.0 * (i // 3 - 1)])
             starts.append(walk[(walk.float() - offset).norm(dim=1).argmin()])
         sc.human_start = [(p.float() * cell).tolist() for p in starts]
 
@@ -143,9 +161,15 @@ def autoplace(sc: Scenario) -> Scenario:
     if sc.human_goal is None:
         # As far as somebody could plausibly walk in the time available, measured
         # along the streets rather than straight through the buildings.
-        budget = 0.55 * 1.3 * sc.episode_seconds
+        # Most of what they could walk in the time, not half of it.  At 0.55 the
+        # evacuee strolls out with a minute to spare in every single episode, the
+        # drones are irrelevant to the outcome, and there is nothing to learn.
+        budget = 0.88 * 1.3 * sc.episode_seconds
         reachable = t.walkable & (from_start < nav.UNREACHABLE / 2)
-        goal_cell = reachable.nonzero()[(from_start[reachable] - budget).abs().argmin()]
+        # Cap the ask at what the map can actually offer, so a small extract gives a
+        # short route rather than silently giving the nearest cell to an impossible one.
+        want = min(budget, float(from_start[reachable].max()) * 0.95)
+        goal_cell = reachable.nonzero()[(from_start[reachable] - want).abs().argmin()]
         sc.human_goal = [(goal_cell.float() * cell).tolist()] * len(sc.human_start)
 
     if sc.drone_start is None:

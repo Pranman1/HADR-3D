@@ -51,6 +51,14 @@ class View:
     fire_near: torch.Tensor        # (B, D) fire proximity at each drone, 0..1
     action: torch.Tensor           # (B, D, 4)
     dt: float = 0.5
+    harmed: torch.Tensor | None = None      # (B,) the evacuee was caught by the fire
+    new_area: torch.Tensor | None = None    # (B,) fraction of map newly searched
+    newly_seen: torch.Tensor | None = None  # (B,) spotted for the first time this step
+    time_left: torch.Tensor | None = None   # (B,) 1 at the start, 0 at the deadline
+
+    def _or_zero(self, field) -> torch.Tensor:
+        v = getattr(self, field)
+        return torch.zeros(self.batch, device=self.drone_pos.device) if v is None else v.float()
 
     @property
     def batch(self) -> int:
@@ -161,6 +169,44 @@ def time_penalty(v: View) -> torch.Tensor:
     return torch.ones(v.batch, device=v.drone_pos.device)
 
 
+# --------------------------------------------------- for a city, not a courtyard
+
+def first_sight(v: View) -> torch.Tensor:
+    """Paid once, the moment anyone first sees the person, and larger the sooner.
+
+    Not in the paper, and it should not be: on a 25 m block the evacuee is inside a
+    rescuer's footprint from the first step, so "how long to find them" is barely a
+    question.  On a real city block it is the *whole* question -- a search that takes
+    ninety seconds has failed even if it succeeds -- and it is the metric the paper
+    itself reports as "first seen".
+
+    Paid once rather than continuously so that finding them is worth something even
+    if they are immediately lost again, which is what makes it a search incentive
+    rather than another way of paying for staring.
+    """
+    return v._or_zero("newly_seen") * v._or_zero("time_left")
+
+
+def coverage(v: View) -> torch.Tensor:
+    """Ground newly looked at this step.
+
+    The dense signal that makes searching learnable at all.  Without it a policy
+    only ever hears about the person once it has already found them, and on a map
+    where that never happens by accident the reward is flat and there is nothing to
+    climb -- measured directly: from the launch point the evacuee was visible in
+    zero of five hundred episodes.
+
+    Rewarding *new* ground rather than ground covered is what stops a drone hovering
+    over one spot collecting the same payment forever.
+    """
+    return v._or_zero("new_area")
+
+
+def evacuee_harmed(v: View) -> torch.Tensor:
+    """The failure the rescue exists to prevent. Weighted negative."""
+    return v._or_zero("harmed")
+
+
 ALL = {
     "capture": capture,
     "reached_safety": reached_safety,
@@ -173,4 +219,7 @@ ALL = {
     "fire_proximity": fire_proximity,
     "control_effort": control_effort,
     "time_penalty": time_penalty,
+    "first_sight": first_sight,
+    "coverage": coverage,
+    "evacuee_harmed": evacuee_harmed,
 }
