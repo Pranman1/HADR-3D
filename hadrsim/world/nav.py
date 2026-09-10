@@ -105,6 +105,43 @@ def clearance(walkable: torch.Tensor, cell_size_m: float = 1.0) -> torch.Tensor:
     return dist[0]
 
 
+def proximity(field: torch.Tensor, radius_m: float, cell_size_m: float = 1.0,
+              levels: int = 3) -> torch.Tensor:
+    """(B, W, H) how near the nearest hot thing is, 0..max(field), falling off to 0.
+
+    "How close is the fire" is a *max* over what is nearby, not a sum of it: blurring
+    measures how much fire there is, so on a small map an extended fire reads as
+    maximal everywhere.  A max-pool of the right radius says the right thing.
+
+    Doing it with one big kernel is unusably slow -- a 57x57 pool over a 300x300 map
+    is three hundred million operations, and at ten times a second that is the whole
+    frame budget.  Chaining small dilated pools reaches just as far for a hundredth
+    of the work: dilations 1, 2, 4, 8 ... each add their own span, so a handful of
+    3x3 pools cover thirty metres.
+    """
+    import torch.nn.functional as Fn
+
+    want = max(1, int(round(radius_m / cell_size_m)))
+    x = field[:, None]
+    out = torch.zeros_like(x)
+
+    reach, dilation, rings = 0, 1, []
+    while reach < want:
+        dilation = min(dilation, want - reach)
+        # Padded by hand: max_pool2d caps padding at half the kernel however far the
+        # dilation reaches, and zero is a safe pad for a max over a non-negative field.
+        x = Fn.max_pool2d(Fn.pad(x, (dilation,) * 4), 3, stride=1, dilation=dilation)
+        reach += dilation
+        dilation *= 2
+        rings.append((reach, x))
+
+    # Weight each ring by how far it reached, so nearby fire dominates distant fire.
+    for reach, ring in rings[-levels:] if levels else rings:
+        out = torch.maximum(out, ring * max(0.0, 1.0 - reach / (want + 1e-6)) ** 0.5)
+    out = torch.maximum(out, rings[0][1] if rings else x)
+    return out[:, 0]
+
+
 def flow(dist: torch.Tensor) -> torch.Tensor:
     """(B, W, H, 2) unit vectors pointing the way out.
 

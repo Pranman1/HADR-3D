@@ -146,14 +146,8 @@ class Human:
         cell = self.terrain.cell_size_m
         cost = None
         if fire is not None:
-            import torch.nn.functional as Fn
-
-            hot = fire.intensity[:, None]
-            near = torch.zeros_like(hot)
-            for radius_m, weight in ((2.0, 1.0), (6.0, 0.55), (12.0, 0.2)):
-                k = 2 * max(1, int(round(radius_m / cell))) + 1
-                near = torch.maximum(near, weight * Fn.max_pool2d(hot, k, 1, k // 2))
-            cost = 1.0 + self.p.fire_detour_cost * near[:, 0]
+            near = nav.proximity(fire.intensity, 12.0, cell)
+            cost = 1.0 + self.p.fire_detour_cost * near
 
         self._dist = nav.distance_field(
             self._passable, (self.goal / cell).long(), cell, cost=cost
@@ -228,17 +222,9 @@ class Human:
         sight.  Bounded by the intensity of a single cell however large the fire, and
         it still falls off with distance.
         """
-        import torch.nn.functional as Fn
-
         cell = self.terrain.cell_size_m
-        heat = (fire.intensity + 0.4 * smoke.column_density()).clamp(0, 2)[:, None]
-
-        field = torch.zeros_like(heat)
-        for radius_m, weight in ((1.5, 1.0), (self.p.perception_m * 0.4, 0.55),
-                                 (self.p.perception_m, 0.22)):
-            k = 2 * max(1, int(round(radius_m / cell))) + 1
-            field = torch.maximum(field, weight * Fn.max_pool2d(heat, k, 1, k // 2))
-        field = field[:, 0]
+        heat = (fire.intensity + 0.4 * smoke.column_density()).clamp(0, 2)
+        field = nav.proximity(heat, self.p.perception_m, cell)
 
         here = nav.sample(field, self.pos, cell)
         step = torch.tensor([cell, 0.0], device=self.device)

@@ -1,0 +1,247 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>hadrsim</title>
+<style>
+  :root {
+    --bg: #16161a; --panel: #1e1e24; --line: #2c2c34; --ink: #e6e6ea;
+    --dim: #8b8b96; --hot: #e8672c; --cool: #5aa9e6; --ok: #5cc98a;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; display: flex; height: 100vh; background: var(--bg);
+         color: var(--ink); font: 13px/1.5 ui-sans-serif, system-ui, sans-serif; }
+  aside { width: 300px; flex: none; padding: 16px; overflow-y: auto;
+          background: var(--panel); border-right: 1px solid var(--line); }
+  main { flex: 1; display: flex; flex-direction: column; min-width: 0; }
+  h1 { margin: 0 0 2px; font-size: 15px; letter-spacing: .02em; }
+  .sub { color: var(--dim); font-size: 11px; margin-bottom: 16px; }
+  h2 { margin: 18px 0 8px; font-size: 11px; text-transform: uppercase;
+       letter-spacing: .08em; color: var(--dim); font-weight: 600; }
+  label { display: block; margin: 9px 0 3px; font-size: 11px; color: var(--dim); }
+  select, input[type=number], input[type=text] {
+    width: 100%; padding: 6px 8px; background: #14141a; color: var(--ink);
+    border: 1px solid var(--line); border-radius: 5px; font: inherit; font-size: 12px; }
+  input[type=range] { width: 100%; }
+  .row { display: flex; gap: 8px; } .row > * { flex: 1; }
+  button { padding: 8px 10px; background: #262630; color: var(--ink); font: inherit;
+           border: 1px solid var(--line); border-radius: 5px; cursor: pointer; }
+  button:hover { background: #30303c; }
+  button.primary { background: var(--hot); border-color: var(--hot); color: #16161a;
+                   font-weight: 600; }
+  button:disabled { opacity: .4; cursor: default; }
+  #stage { flex: 1; position: relative; overflow: hidden; background: #101014; }
+  canvas { position: absolute; inset: 0; margin: auto; image-rendering: pixelated; }
+  #bar { display: flex; align-items: center; gap: 14px; padding: 10px 16px;
+         border-top: 1px solid var(--line); background: var(--panel); font-size: 12px; }
+  .stat b { color: var(--ink); font-variant-numeric: tabular-nums; }
+  .stat span { color: var(--dim); }
+  .hint { color: var(--dim); font-size: 11px; margin-top: 6px; }
+  .pill { display: inline-block; padding: 1px 6px; border-radius: 999px;
+          background: #262630; color: var(--dim); font-size: 10px; margin-left: 6px; }
+  .place-mode { outline: 2px solid var(--hot); }
+</style>
+
+<aside>
+  <h1>hadrsim</h1>
+  <div class="sub">scenario engine · step 1 (no drones yet)</div>
+
+  <h2>Place</h2>
+  <select id="preset"></select>
+  <label>Radius (m)</label>
+  <input type="number" id="radius" value="150" min="50" max="500" step="10">
+  <label>Cell size (m)</label>
+  <input type="number" id="cell" value="1" min="0.5" max="4" step="0.5">
+
+  <h2>Weather</h2>
+  <label>Wind speed <span id="windv" class="pill">5 m/s</span></label>
+  <input type="range" id="wind" min="0" max="15" step="0.5" value="5">
+  <label>Blowing towards <span id="bearv" class="pill">40°</span></label>
+  <input type="range" id="bearing" min="0" max="359" step="5" value="40">
+
+  <h2>Agents</h2>
+  <div class="row">
+    <div><label>People</label><input type="number" id="humans" value="1" min="1" max="12"></div>
+    <div><label>Drones</label><input type="number" id="drones" value="2" min="0" max="6"></div>
+  </div>
+  <label>Policy</label>
+  <select id="policy"><option value="none">none — nothing flies yet</option></select>
+
+  <h2>Placement</h2>
+  <div class="row">
+    <button id="placeFire">Fire</button>
+    <button id="placeStart">Start</button>
+    <button id="placeGoal">Exit</button>
+  </div>
+  <div class="hint">Pick one, then click the map. Leave alone to auto-place.</div>
+  <label>Seed</label>
+  <input type="number" id="seed" value="0">
+
+  <h2 style="margin-top:22px">&nbsp;</h2>
+  <button class="primary" id="build" style="width:100%">Build scenario</button>
+</aside>
+
+<main>
+  <div id="stage">
+    <canvas id="map"></canvas>
+    <canvas id="fire"></canvas>
+    <canvas id="agents"></canvas>
+  </div>
+  <div id="bar">
+    <button id="play" disabled>▶ Play</button>
+    <button id="step" disabled>Step</button>
+    <button id="reset" disabled>Reset</button>
+    <span class="stat"><span>speed</span> <b id="speedv">1×</b></span>
+    <input type="range" id="speed" min="0.25" max="8" step="0.25" value="1" style="width:110px">
+    <span class="stat"><span>t</span> <b id="t">0.0</b>s</span>
+    <span class="stat"><span>burning</span> <b id="burning">0</b></span>
+    <span class="stat"><span>burnt</span> <b id="burnt">0</b></span>
+    <span class="stat"><span>safe</span> <b id="safe">0</b></span>
+    <span class="stat" id="status" style="margin-left:auto;color:var(--dim)">idle</span>
+  </div>
+</main>
+
+<script>
+const $ = id => document.getElementById(id);
+const cvMap = $("map"), cvFire = $("fire"), cvAgents = $("agents");
+let world = null, placing = null, ws = null, playing = false;
+let cfg = {};
+
+fetch("/presets").then(r => r.json()).then(d => {
+  d.presets.forEach(p => $("preset").add(new Option(p, p)));
+  cfg = d.defaults;
+});
+
+// ---------------------------------------------------------------- layout
+function fit() {
+  if (!world) return;
+  const box = $("stage").getBoundingClientRect();
+  const s = Math.max(1, Math.floor(Math.min(box.width / world.width,
+                                            box.height / world.height)));
+  for (const c of [cvMap, cvFire, cvAgents]) {
+    c.style.width = world.width * s + "px";
+    c.style.height = world.height * s + "px";
+  }
+  cvAgents.width = world.width * s; cvAgents.height = world.height * s;
+  cvAgents.dataset.s = s;
+}
+addEventListener("resize", fit);
+
+// ---------------------------------------------------------------- drawing
+function drawAgents(state) {
+  const s = +cvAgents.dataset.s, g = cvAgents.getContext("2d");
+  g.clearRect(0, 0, cvAgents.width, cvAgents.height);
+
+  const goals = cfg.human_goal || [];
+  g.strokeStyle = "#5cc98a"; g.lineWidth = Math.max(2, s);
+  goals.forEach(p => {
+    const x = p[0] / world.cell * s, y = p[1] / world.cell * s, r = 5 * s;
+    g.beginPath(); g.moveTo(x - r, y); g.lineTo(x + r, y);
+    g.moveTo(x, y - r); g.lineTo(x, y + r); g.stroke();
+  });
+
+  (state.humans || []).forEach(h => {
+    const c = h.panic;                       // pale when calm, hot when frantic
+    g.fillStyle = `rgb(${228 + c * 8},${230 - c * 138},${236 - c * 178})`;
+    g.beginPath();
+    g.arc(h.x * s, h.y * s, Math.max(3, 2.2 * s), 0, 7); g.fill();
+    if (h.reached) { g.strokeStyle = "#5cc98a"; g.lineWidth = 2; g.stroke(); }
+  });
+
+  (state.drones || []).forEach(d => {
+    g.fillStyle = d.role === "hlr" ? "#5aa9e6" : "#8fd0ff";
+    g.beginPath(); g.arc(d.x * s, d.y * s, Math.max(3, 2 * s), 0, 7); g.fill();
+  });
+}
+
+function blit(canvas, dataUri, w, h) {
+  const img = new Image();
+  img.onload = () => {
+    canvas.width = w; canvas.height = h;
+    canvas.getContext("2d").drawImage(img, 0, 0);
+  };
+  img.src = dataUri;
+}
+
+// ---------------------------------------------------------------- socket
+function connect() {
+  ws = new WebSocket(`ws://${location.host}/live`);
+  ws.onmessage = ev => {
+    const m = JSON.parse(ev.data);
+    if (m.type === "scenario") {
+      world = m; cfg = m.config;
+      blit(cvMap, m.map, m.width, m.height);
+      fit();
+      $("status").textContent = "ready";
+      ["play", "step", "reset"].forEach(b => $(b).disabled = false);
+    } else if (m.type === "frame") {
+      const st = m.state;
+      blit(cvFire, m.fire, world.width, world.height);
+      drawAgents(st);
+      $("t").textContent = st.t.toFixed(1);
+      $("burning").textContent = st.burning;
+      $("burnt").textContent = st.burnt;
+      $("safe").textContent = `${st.reached}/${(st.humans || []).length}`;
+      if (st.done) { playing = false; $("play").textContent = "▶ Play";
+                     $("status").textContent = "episode over"; }
+    }
+  };
+  ws.onclose = () => { $("status").textContent = "disconnected"; setTimeout(connect, 1000); };
+}
+connect();
+
+// ---------------------------------------------------------------- controls
+$("wind").oninput = e => $("windv").textContent = e.target.value + " m/s";
+$("bearing").oninput = e => $("bearv").textContent = e.target.value + "°";
+$("speed").oninput = e => {
+  $("speedv").textContent = e.target.value + "×";
+  ws.send(JSON.stringify({ type: "speed", value: +e.target.value }));
+};
+
+$("build").onclick = () => {
+  const preset = $("preset").value;
+  const paper = preset.startsWith("Paper");
+  $("status").textContent = "building…";
+  ["play", "step", "reset"].forEach(b => $(b).disabled = true);
+  ws.send(JSON.stringify({ type: "build", config: {
+    ...cfg,
+    place: paper ? null : preset,
+    paper_map: paper ? "maps/rust25.yaml" : null,
+    radius_m: +$("radius").value,
+    cell_size_m: +$("cell").value,
+    wind_mps: +$("wind").value,
+    wind_bearing_deg: +$("bearing").value,
+    n_humans: +$("humans").value,
+    n_drones: +$("drones").value,
+    seed: +$("seed").value,
+    policy: $("policy").value,
+  }}));
+};
+
+$("play").onclick = () => {
+  playing = !playing;
+  $("play").textContent = playing ? "❚❚ Pause" : "▶ Play";
+  $("status").textContent = playing ? "running" : "paused";
+  ws.send(JSON.stringify({ type: playing ? "play" : "pause" }));
+};
+$("step").onclick = () => ws.send(JSON.stringify({ type: "step" }));
+$("reset").onclick = () => { playing = false; $("play").textContent = "▶ Play";
+                             ws.send(JSON.stringify({ type: "reset" })); };
+
+// Click-to-place: pick a control, then a point on the map.
+for (const [id, key] of [["placeFire", "fire_at"], ["placeStart", "human_start"],
+                         ["placeGoal", "human_goal"]]) {
+  $(id).onclick = () => {
+    document.querySelectorAll("aside button").forEach(b => b.classList.remove("place-mode"));
+    placing = placing === key ? null : key;
+    if (placing) $(id).classList.add("place-mode");
+  };
+}
+cvAgents.onclick = ev => {
+  if (!placing || !world) return;
+  const s = +cvAgents.dataset.s, r = cvAgents.getBoundingClientRect();
+  const p = [(ev.clientX - r.left) / s * world.cell, (ev.clientY - r.top) / s * world.cell];
+  cfg[placing] = placing === "fire_at" ? p : [p];
+  document.querySelectorAll("aside button").forEach(b => b.classList.remove("place-mode"));
+  placing = null;
+  $("status").textContent = "placed — press Build";
+};
+</script>

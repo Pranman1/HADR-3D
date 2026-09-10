@@ -867,6 +867,44 @@ right when `sensing/occlusion.py` exists.
 
 ---
 
+## 11c. The control panel  *(built)*
+
+    python -m hadrsim.gui        # then open the URL it prints
+
+Pick a city, set the wind, drop the fire and the people where you want them, press
+play.  The point is not the picture -- the video renderer already makes pictures --
+it is being able to **change something and watch what happens** without editing a
+file, which is how you find out whether a policy generalises.
+
+Controls: place (four real cities plus the paper's grid), radius, cell size, wind
+speed and bearing, number of people, number of drones, seed, and click-to-place for
+the fire, the start and the exit.  Anything left alone is auto-placed.  Play, pause,
+single-step, reset, and playback speed up to 8x.
+
+**Two pieces underneath, and both are needed by training anyway**
+
+- `scenario.py` -- everything that makes one run different from another, buildable
+  from a dict, a yaml file or a GUI form.  All three have to produce *the same
+  thing*: a panel that quietly constructs a slightly different world from the
+  training config is a very expensive kind of bug, and most of that file's tests are
+  about sameness rather than about scenarios.
+- `runner.py` -- steps one scenario, and is what the GUI, the video script and
+  eventually the trainer all drive.  Stepping is exposed both per physics tick and
+  per wall-clock slice, so the browser can run at whatever rate it manages without
+  the simulation being able to tell.
+
+**The drone and policy controls are present and inert.**  There is no policy yet.
+When there is, it plugs into `Runner` and the panel already knows how to ask for it.
+
+**One optimisation that mattered.**  A live panel needs real time, and the world ran
+at 0.65x.  Nearly all of it was one line: "how close is the fire" was a 57x57
+max-pool over the whole map, ten times a second -- three hundred million operations
+a call.  Chained *dilated* pools reach exactly as far for a hundredth of the work
+(verified identical on 100% of cells), and the world now runs at **7.5x real time**
+headless, ~17 fps live.
+
+---
+
 ## 12. How we compare against the paper
 
 Not "do we beat it." Our simulator is harder, so raw numbers will not match and should
