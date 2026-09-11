@@ -32,6 +32,9 @@ C_SMOKE = np.array([176, 176, 182])
 C_CALM = np.array([228, 230, 236])
 C_PANIC = np.array([236, 92, 58])
 C_GOAL = np.array([92, 208, 136])
+C_HLR = np.array([90, 170, 240])     # the high rescuer: wide view, cannot intercept
+C_LLR = np.array([150, 220, 255])    # the low rescuer: the only one that can
+C_SIGHT = np.array([70, 130, 190])   # the ground a camera is currently covering
 
 
 @dataclass
@@ -70,7 +73,8 @@ class Recorder:
             img = np.where(built[..., None], C_BUILDING * lift, img)
         return img.clip(0, 255).astype(np.uint8)
 
-    def frame(self, fire=None, smoke=None, human=None, env: int = 0) -> None:
+    def frame(self, fire=None, smoke=None, human=None, drones=None, cameras=None,
+              env: int = 0) -> None:
         img = self._base.astype(np.float32).copy()
 
         if fire is not None:
@@ -90,6 +94,21 @@ class Recorder:
             img = img * (1 - alpha) + C_SMOKE * alpha
 
         img = np.repeat(np.repeat(img, self.scale, 0), self.scale, 1)
+
+        if drones is not None:
+            cell = self.terrain.cell_size_m
+            from hadrsim.sensing import fov as fov_mod
+            for i, drone in enumerate(drones):
+                colour = C_HLR if i == 0 else C_LLR
+                p = drone.pos[env].cpu().numpy() / cell
+                # The ground the camera covers, so you can see what it is missing.
+                if cameras is not None:
+                    r = float(fov_mod.ground_footprint(
+                        cameras[i], drone.pos, drone.quat)[env]) / cell
+                    _ring(img, p[1] * self.scale, p[0] * self.scale,
+                          int(r * self.scale), C_SIGHT)
+                _disc(img, p[1] * self.scale, p[0] * self.scale,
+                      max(2, int(self.scale * 1.6)), colour)
 
         if human is not None:
             cell = self.terrain.cell_size_m
@@ -127,6 +146,22 @@ def _disc(img: np.ndarray, cx: float, cy: float, r: int, colour) -> None:
     ys, xs = np.meshgrid(np.arange(y0, y1), np.arange(x0, x1))
     inside = (xs - cx) ** 2 + (ys - cy) ** 2 <= r * r
     img[x0:x1, y0:y1][inside] = colour
+
+
+def _ring(img: np.ndarray, cx: float, cy: float, r: int, colour) -> None:
+    """An outline, so a camera footprint shows what it covers without hiding it."""
+    h, w = img.shape[:2]
+    if r < 2:
+        return
+    x0, x1 = max(0, int(cx - r)), min(h, int(cx + r + 1))
+    y0, y1 = max(0, int(cy - r)), min(w, int(cy + r + 1))
+    if x1 <= x0 or y1 <= y0:
+        return
+    ys, xs = np.meshgrid(np.arange(y0, y1), np.arange(x0, x1))
+    d = np.sqrt((xs - cx) ** 2 + (ys - cy) ** 2)
+    edge = (d <= r) & (d >= r - max(1.0, r * 0.06))
+    patch = img[x0:x1, y0:y1]
+    patch[edge] = patch[edge] * 0.45 + colour * 0.55
 
 
 def _cross(img: np.ndarray, cx: float, cy: float, r: int, colour) -> None:

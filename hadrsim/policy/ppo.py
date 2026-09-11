@@ -36,7 +36,8 @@ class PPOConfig:
     gamma: float = 0.99
     gae_lambda: float = 0.95
     clip: float = 0.2
-    entropy: float = 0.005
+    entropy: float = 0.01          # at the start
+    entropy_final: float = 0.0     # and by the end
     value_coef: float = 0.5
     max_grad_norm: float = 0.5
     epochs: int = 4
@@ -166,7 +167,22 @@ class PPO:
 
     # ---------------------------------------------------------------- update
 
-    def update(self, buf, adv, returns, start_state=None) -> dict:
+    def entropy_now(self, progress: float) -> float:
+        """The exploration bonus, annealed from `entropy` to `entropy_final`.
+
+        Held constant, it never stops paying a policy to stay uncertain, and the
+        spread it settles on is whatever balances that bonus against the advantage --
+        which here meant never settling at all: `log_std` moved by under two percent
+        in two million steps, in every run. A policy that cannot become confident is
+        a noisy controller that sometimes stumbles into the right answer, which is
+        exactly what the numbers showed: respectable with exploration on, near zero
+        with it off.
+        """
+        cfg = self.cfg
+        t = min(max(progress, 0.0), 1.0)
+        return cfg.entropy + (cfg.entropy_final - cfg.entropy) * t
+
+    def update(self, buf, adv, returns, start_state=None, progress: float = 0.0) -> dict:
         """Replay the rollout in order, carrying recurrent state, and clip.
 
         One backward pass over the whole sequence rather than one per timestep.  The
@@ -179,6 +195,7 @@ class PPO:
         old_logp = torch.stack(buf["logp"])
         normalised = (adv - adv.mean()) / (adv.std() + 1e-8)
         alive = 1.0 - torch.stack(buf["done"])
+        beta = self.entropy_now(progress)
 
         stats = {}
         for _ in range(cfg.epochs):
@@ -193,7 +210,7 @@ class PPO:
                                          clipped * normalised[t]).mean()
                 value_loss = (value - returns[t]).pow(2).mean()
                 losses.append(policy_loss + cfg.value_coef * value_loss
-                              - cfg.entropy * entropy.mean())
+                              - beta * entropy.mean())
                 # An episode boundary ends the memory. Carrying it across teaches the
                 # policy to remember something that never happened.
                 state = tuple(h * alive[t].view(1, -1, 1) for h in state)
@@ -204,7 +221,8 @@ class PPO:
             nn.utils.clip_grad_norm_(self.net.parameters(), cfg.max_grad_norm)
             self.opt.step()
             stats = {"policy_loss": policy_loss.item(), "value_loss": value_loss.item(),
-                     "entropy": entropy.mean().item()}
+                     "entropy": entropy.mean().item(), "beta": beta,
+                     "std": float(self.net.log_std.exp().mean())}
         return stats
 
     def train(self, iterations: int, log_every: int = 5, on_log=None) -> list:
@@ -212,7 +230,7 @@ class PPO:
         for i in range(1, iterations + 1):
             buf, last_value, info, start_state = self.collect()
             adv, returns = self.advantages(buf, last_value)
-            stats = self.update(buf, adv, returns, start_state)
+            stats = self.update(buf, adv, returns, start_state, i / max(iterations, 1))
 
             row = {
                 "iteration": i,
@@ -227,7 +245,8 @@ class PPO:
                 print(f"  {i:>4}  steps {row['steps']:>9,}  reward {row['reward']:+8.3f}"
                       f"  captured {row['captured']*100:5.1f}%"
                       f"  reached {row['reached']*100:5.1f}%"
-                      f"  entropy {row.get('entropy', 0):6.2f}")
+                      f"  std {row.get('std', 0):5.3f}"
+                      f"  beta {row.get('beta', 0):6.4f}")
                 if on_log:
                     on_log(row)
         return history

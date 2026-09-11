@@ -26,6 +26,8 @@ closed here by construction: the world's true state is never passed to the score
 
 from __future__ import annotations
 
+import math
+
 import torch
 
 from hadrsim.agents import airframes as af
@@ -56,7 +58,11 @@ class TrainEnv:
 
     def __init__(self, scenario, batch: int = 256, detector: str = "oracle",
                  fidelity: str = "point_mass", weights: dict | None = None,
-                 device="cpu"):
+                 cameras=None, start_alt=None, capture_radius: float | None = None,
+                 airframe=None, device="cpu"):
+        """`cameras`, `start_alt`, `capture_radius` and `airframe` exist so a scenario
+        can be built at the paper's scale -- a 25 m block, narrow sensors, teleporting
+        drones -- without any of that leaking into the defaults."""
         from hadrsim.scenario import autoplace
 
         self.scenario = autoplace(scenario)
@@ -72,15 +78,18 @@ class TrainEnv:
         self.smoke = smoke_mod.Smoke(self.terrain, batch, device=self.device)
         self.human = Human(self.terrain, batch, device=self.device)
         self.crowd = Crowd(self.terrain, device=self.device)
+        frame = airframe or af.X500_V2
         self.drones = [
-            Drone(batch, af.X500_V2, fidelity, self.device),      # HLR, high and wide
-            Drone(batch, af.X500_V2, fidelity, self.device),      # LLR, low and narrow
+            Drone(batch, frame, fidelity, self.device),           # HLR, high and wide
+            Drone(batch, frame, fidelity, self.device),           # LLR, low and narrow
         ]
-        self.cameras = [fov.DOWNWARD, fov.FORWARD]
+        self.cameras = list(cameras) if cameras else [fov.DOWNWARD, fov.FORWARD]
+        self.capture_radius = (CAPTURE_RADIUS_M if capture_radius is None
+                               else capture_radius)
         self.detectors = [det_mod.make(detector, c) for c in self.cameras]
         self.reward = Composer(weights)
 
-        self._start_alt = [40.0, 4.0]
+        self._start_alt = list(start_alt) if start_alt else [40.0, 4.0]
         self.reset()
 
     # ------------------------------------------------------------------ setup
@@ -169,18 +178,42 @@ class TrainEnv:
         return fresh, strength, conf > 0
 
     def observe(self) -> dict:
-        """The contract, per drone. See `core/spec.py`."""
+        """The contract, per drone, in units a network can use. See `core/spec.py`.
+
+        **Everything is scaled into roughly [-1, 1].**  Raw values span metres of map
+        (0-300), altitudes (2-120), speeds and angles all at once, fed to a freshly
+        initialised MLP -- and the few dozen numbers that matter, the detection slots,
+        are lost among four thousand that do not.  The policy's exploration spread
+        never shrank by so much as a percent in two million steps, in every run, on
+        both problems: it was never getting a signal clear enough to become confident
+        about anything.
+
+        Scaled by *known constants* rather than running statistics, deliberately.  A
+        real aircraft knows its own speed limit, its ceiling and the size of its
+        search area; it does not know the mean and variance of a training
+        distribution it was never part of.  Fixed scales are one less thing that has
+        to be reproduced on hardware.
+        """
         detections = self._detect()
         believed, confidence, seen_by = self._belief(detections)
         self._last = (detections, believed, confidence, seen_by)
+
+        w_m, h_m = self.terrain.extent_m
+        extent = torch.tensor([w_m, h_m, self.ALT_MAX], device=self.device)
+        speed = self.drones[0].af.max_speed_mps
+        half_pi = math.pi / 2
 
         out = []
         for i, drone in enumerate(self.drones):
             roll, pitch = drone.attitude
             other = self.drones[1 - i]
+            reach = self.cameras[i].range_m
             own = torch.cat([
-                drone.pos, drone.vel, drone.yaw[:, None],
-                drone.pos[:, 2:3], roll[:, None], pitch[:, None],
+                drone.pos / extent,
+                drone.vel / speed,
+                (drone.yaw / math.pi)[:, None],
+                (drone.pos[:, 2:3] / self.ALT_MAX),
+                (roll / half_pi)[:, None], (pitch / half_pi)[:, None],
             ], -1)
 
             d = detections[i]
@@ -191,14 +224,16 @@ class TrainEnv:
             stale = (d.confidence[:, 0] <= 0) & (self._last_age < 30.0)
             rel[:, 0] = torch.where(stale[:, None], self._last_pos - drone.pos, rel[:, 0])
             age[:, 0] = torch.where(stale, self._last_age, age[:, 0])
-            slots = torch.cat([rel, d.velocity, d.confidence[..., None],
+            slots = torch.cat([(rel / reach).clamp(-2, 2), d.velocity / speed,
+                               d.confidence[..., None],
                                (age[..., None] / 30.0).clamp(0, 1)], -1)
 
-            mate = torch.cat([other.pos - drone.pos,
+            mate = torch.cat([(other.pos - drone.pos) / extent,
                               torch.ones(self.batch, 1, device=self.device),
                               torch.zeros(self.batch, 1, device=self.device)], -1)
             goal3 = torch.cat([self.goal, torch.zeros(self.batch, 1, device=self.device)], -1)
-            task = torch.cat([goal3 - drone.pos, self._time_left()[:, None]], -1)
+            task = torch.cat([(goal3 - drone.pos) / extent,
+                              self._time_left()[:, None]], -1)
 
             out.append({
                 "self": own,
@@ -308,10 +343,10 @@ class TrainEnv:
         # Capture is the low rescuer's job alone -- the high one cannot intercept,
         # which is the asymmetry the whole paper is about.
         llr = self.drones[LLR]
-        reach = (llr.pos[:, :2] - self.human.pos).norm(dim=-1) < CAPTURE_RADIUS_M
+        reach = (llr.pos[:, :2] - self.human.pos).norm(dim=-1) < self.capture_radius
         newly = reach & ~self.captured
         self.captured |= reach
-        self.human.led_by(llr.pos[:, :2], CAPTURE_RADIUS_M)
+        self.human.led_by(llr.pos[:, :2], self.capture_radius)
 
         obs = self.observe()
         seen = obs["seen_by"].any(-1)
