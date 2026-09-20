@@ -410,6 +410,38 @@ is not the best. A policy that had memorised Berkeley's street pattern would col
 on Manhattan's 400 m towers or Venice's alleys; this one does not. What it learned is
 *search* -- a question the 2D grid could never have asked.
 
+## 11. A thirty-line rule nearly matches the learned policy  *(20 Sep)*
+
+Building the policy seam produced three scripted baselines for free, and one of
+them is the comparison the week had been missing. Berkeley, 256 episodes, full
+fidelity, deterministic:
+
+```
+                            launch 25 m   launch 60 m   time to capture (25 / 60 m)
+hover  (the floor)               7.8%          5.1%
+lawnmower sweep                 15.6%         16.0%
+last_sighting  (30 lines)       45.7%         21.5%          17 s / 28 s
+sweep_closeness  (learned)      48.4%         19.5%          19 s / 46 s
+keep-best seed 0 (learned)      28.5%         15.6%          19 s / 38 s
+```
+
+`last_sighting` does one thing: fly toward wherever the team last saw the person,
+hold if it never has. The learned policy beats it by 2.7 points at 25 m and loses
+to it at 60 m -- and is slower to close at both distances. Every other learned
+checkpoint is below it everywhere.
+
+Two things this says. First, on a 200 m block with an 80 m downward camera, *seen*
+is 100% even for a hovering drone: finding the person is nearly free at this scale,
+and the whole task is closing. A rule that closes does about as well as anything we
+have trained. Second, the cross-city result needs this row: a rule that follows the
+last sighting is map-agnostic by construction, so "it generalises" is only a claim
+about learning if the learned policy generalises *better than the rule*. That run is
+in progress (`logs/generalise_last_sighting.log`).
+
+What would make the learned policy earn its place: a larger map or a narrower
+camera, where search is not free; a launch further out, where the 60 m gap already
+shows; or the person moving unpredictably, where anticipation beats pursuit.
+
 ---
 
 ## Caveats, honestly

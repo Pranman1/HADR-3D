@@ -221,6 +221,15 @@ its own do-nothing floor:
 **Held-out mean +33.6 points across nine unseen cities; worst +29.3.** It learned to
 search, not a street pattern.
 
+### Against a hand-written rule (added 20 Sep)
+
+`last_sighting` — fly toward wherever the team last saw the person, thirty lines —
+scores 45.7% at 25 m and 21.5% at 60 m on Berkeley. The best learned policy scores
+48.4% and 19.5%, and closes more slowly. Finding the person is nearly free at this
+map scale (a hovering drone still sees them 100% of the time); the task is closing,
+and a rule that closes is about as good as what we have trained so far. The learned
+policy has not yet clearly earned its place over that baseline.
+
 ### The person
 
 Fire on the route in Berkeley: straight line 36 m, walked 99 m around it, zero steps

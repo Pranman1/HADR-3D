@@ -117,6 +117,41 @@ class TrainEnv:
             self.step_count = torch.zeros(self.batch, dtype=torch.long, device=self.device)
             mask = torch.ones(self.batch, dtype=torch.bool, device=self.device)
 
+        start, goal, ignite = self._draw_episodes()
+        self.goal, self.start = goal, start
+
+        # Whole-batch resets only, for now: the fire and the person both carry state
+        # that would need per-environment surgery, and the policy is trained on fixed
+        # -length episodes where everything finishes together anyway.
+        self.fire.reset((ignite / self.cell).long(), radius_m=sc.fire_radius_m)
+        self.human.reset(start, goal)
+        self.smoke.update(self.fire, self.wind)
+        self._launch_drones(start, goal)
+
+        self.step_count.zero_()
+        self.captured = torch.zeros(self.batch, dtype=torch.bool, device=self.device)
+        self._want = torch.zeros(self.batch, 2, device=self.device)
+        self._fire_near = nav.proximity(self.fire.intensity, 12.0, self.cell)
+        self.searched = torch.zeros(self.batch, *self.terrain.shape, device=self.device)
+        self._new_area = torch.zeros(self.batch, device=self.device)
+        self._first_seen = torch.full((self.batch,), -1.0, device=self.device)
+        self._last_pos = torch.zeros(self.batch, 3, device=self.device)
+        self._last_age = torch.full((self.batch,), 1e3, device=self.device)
+        # Environments whose episode is still running.  The batch resets together --
+        # the fire and the person carry state that would need per-environment surgery
+        # -- so an episode that ends at step 73 of 100 keeps being stepped for another
+        # 27, and every one of those steps was being paid and trained on.  Measured on
+        # the paper grid: *every* episode ends early, a quarter of all training steps
+        # happened after the episode they belong to was over.
+        self.active = torch.ones(self.batch, dtype=torch.bool, device=self.device)
+        self._was_reached = torch.zeros(self.batch, dtype=torch.bool, device=self.device)
+        self._was_harmed = torch.zeros(self.batch, dtype=torch.bool, device=self.device)
+        self._newly = (self._was_reached, self._was_harmed)
+        return self.observe()
+
+    def _draw_episodes(self):
+        """A route and a fire origin per environment: (start, goal, ignite), metres."""
+        sc = self.scenario
         # A different route and a different fire per environment, drawn from the
         # scenario's spread.  With one of each, every environment in the batch is the
         # same episode: the policy memorises a trajectory instead of learning a task,
@@ -133,16 +168,11 @@ class TrainEnv:
             start = torch.tensor(sc.human_start[0], device=self.device).expand(self.batch, 2)
             goal = torch.tensor(sc.human_goal[0], device=self.device).expand(self.batch, 2)
             ignite = torch.tensor(sc.fire_at, device=self.device).expand(self.batch, 2)
-        self.goal = goal
-        self.start = start
+        return start, goal, ignite
 
-        # Whole-batch resets only, for now: the fire and the person both carry state
-        # that would need per-environment surgery, and the policy is trained on fixed
-        # -length episodes where everything finishes together anyway.
-        self.fire.reset((ignite / self.cell).long(), radius_m=sc.fire_radius_m)
-        self.human.reset(start, goal)
-        self.smoke.update(self.fire, self.wind)
-
+    def _launch_drones(self, start, goal) -> None:
+        """Put both rescuers at the launch point, at their role's starting altitude."""
+        sc = self.scenario
         self._start_alt = [min(max(a, lo), hi) for a, (lo, hi)
                            in zip(self._start_alt, self.ALT_BANDS)]
         if self.launch_offset_m is None:
@@ -176,27 +206,6 @@ class TrainEnv:
             pos = torch.cat([base, torch.full((self.batch, 1), self._start_alt[i],
                                               device=self.device)], -1)
             drone.reset(pos)
-
-        self.step_count.zero_()
-        self.captured = torch.zeros(self.batch, dtype=torch.bool, device=self.device)
-        self._want = torch.zeros(self.batch, 2, device=self.device)
-        self._fire_near = nav.proximity(self.fire.intensity, 12.0, self.cell)
-        self.searched = torch.zeros(self.batch, *self.terrain.shape, device=self.device)
-        self._new_area = torch.zeros(self.batch, device=self.device)
-        self._first_seen = torch.full((self.batch,), -1.0, device=self.device)
-        self._last_pos = torch.zeros(self.batch, 3, device=self.device)
-        self._last_age = torch.full((self.batch,), 1e3, device=self.device)
-        # Environments whose episode is still running.  The batch resets together --
-        # the fire and the person carry state that would need per-environment surgery
-        # -- so an episode that ends at step 73 of 100 keeps being stepped for another
-        # 27, and every one of those steps was being paid and trained on.  Measured on
-        # the paper grid: *every* episode ends early, a quarter of all training steps
-        # happened after the episode they belong to was over.
-        self.active = torch.ones(self.batch, dtype=torch.bool, device=self.device)
-        self._was_reached = torch.zeros(self.batch, dtype=torch.bool, device=self.device)
-        self._was_harmed = torch.zeros(self.batch, dtype=torch.bool, device=self.device)
-        self._newly = (self._was_reached, self._was_harmed)
-        return self.observe()
 
     # ------------------------------------------------------------- perception
 
@@ -375,14 +384,20 @@ class TrainEnv:
 
     def step(self, actions: torch.Tensor):
         """One policy decision. `actions` is (B, 2, 4). Returns obs, reward, done, info."""
-        dt = self.clock.dt
-        w_m, h_m = self.terrain.extent_m
-        llr_drone = self.drones[LLR]
         running = self.active.clone()
         # A finished environment stops flying as well as stops being paid; otherwise
         # its drones wander on and the observations they feed the recurrent state are
         # from an episode that no longer exists.
         actions = actions * running[:, None, None].float()
+        reach = self._fly(actions)
+        return self._settle(actions, reach, running)
+
+    def _fly(self, actions: torch.Tensor) -> torch.Tensor:
+        """Half a second of physics: 50 ticks of drones, person, wind and fire.
+        Returns which environments' low rescuer came within capture range."""
+        dt = self.clock.dt
+        w_m, h_m = self.terrain.extent_m
+        llr_drone = self.drones[LLR]
         reach = torch.zeros(self.batch, dtype=torch.bool, device=self.device)
 
         for _ in range(self.clock.substeps):
@@ -402,7 +417,12 @@ class TrainEnv:
             # policy that cannot close, and is not.
             reach |= ((llr_drone.pos[:, :2] - self.human.pos).norm(dim=-1)
                       < self.capture_radius)
+        return reach
 
+    def _settle(self, actions, reach, running):
+        """Everything that happens once per decision after the flight: smoke, the
+        person's next intention, captures, observation, reward, episode ends."""
+        llr_drone = self.drones[LLR]
         self.smoke.update(self.fire, self.wind)
         # Computed once and shared. "How near is the fire" was being worked out three
         # times a step -- once for the person's panic and once per drone for the
