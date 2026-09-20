@@ -33,6 +33,7 @@ sys.path.insert(0, str(__import__("pathlib").Path(__file__).resolve().parents[1]
 
 from hadrsim.agents.airframes import Airframe
 from hadrsim.envs.train import TrainEnv
+from hadrsim.eval import evaluate
 from hadrsim.scenario import Scenario
 from hadrsim.sensing.fov import Camera
 from hadrsim.world.fire import FireParams
@@ -99,35 +100,11 @@ def build(batch: int = 1024, device: str = "cuda", pairs: int = 40, **over) -> T
 
 
 def report(env, tag, net=None, deterministic=True):
-    """Run one batch of episodes and print the paper's four metrics."""
-    obs, state = env.reset(), None
-    B = env.batch
-    z = lambda: torch.zeros(B, dtype=torch.bool, device=env.device)
-    cap, seen, reached = z(), z(), z()
-    cap_t = torch.full((B,), float("nan"), device=env.device)
-    first = torch.full((B,), float("nan"), device=env.device)
-    in_view = torch.zeros(B, device=env.device)
-
-    with torch.no_grad():
-        for i in range(env.clock.max_steps):
-            if net is None:
-                a = torch.zeros(B, 2, 4, device=env.device)
-            else:
-                a, _, _, state = net.act(obs, state, deterministic=deterministic)
-            obs, _, _, info = env.step(a)
-            now = obs["seen_by"].any(-1)
-            in_view += now.float()
-            first = torch.where(now & first.isnan(), torch.full_like(first, i), first)
-            newly = info["captured"] & ~cap
-            cap_t = torch.where(newly, torch.full_like(cap_t, i), cap_t)
-            cap |= info["captured"]; seen |= now; reached |= info["reached"]
-
-    pct = lambda t: float(t.float().mean()) * 100
-    mean = lambda t, m: float(t[m].mean()) if bool(m.any()) else float("nan")
-    print(f"  {tag:<26} capture {pct(cap):5.1f}%   time {mean(cap_t, cap):5.1f}"
-          f"   first seen {mean(first, seen):5.1f}"
-          f"   in view {mean(in_view / env.clock.max_steps, seen) * 100:5.1f}%")
-    return pct(cap)
+    """The paper's four metrics, from the shared evaluator."""
+    m = evaluate(env, net, deterministic=deterministic)
+    print(f"  {tag:<26} capture {m.capture:5.1f}%   time {m.time_to_capture_s / env.clock.control_dt:5.1f}"
+          f"   first seen {m.first_seen_s / env.clock.control_dt:5.1f}   in view {m.in_view:5.1f}%")
+    return m.capture
 
 
 if __name__ == "__main__":

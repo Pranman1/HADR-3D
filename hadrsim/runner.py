@@ -169,7 +169,7 @@ class PolicyRunner:
 
     def __init__(self, scenario, checkpoint: str | None = None, device: str = "cpu"):
         from hadrsim.envs.train import TrainEnv
-        from hadrsim.policy.ppo import ActorCritic
+        from hadrsim.policy import base
 
         # Full fidelity: the quadrotor tier and the detector that can miss -- the world
         # the policies since 14 Sep were trained in.  Showing them anything easier would
@@ -179,16 +179,8 @@ class PolicyRunner:
         self.scenario = self.env.scenario
         self.terrain = self.env.terrain
         self.clock = self.env.clock
-        self.net = None
-        if checkpoint and checkpoint not in ("none", ""):
-            blob = torch.load(checkpoint, map_location=device)
-            # Which encoder trained is recoverable from the weights: only the
-            # convolutional one has a `conv` submodule, and loading the wrong one
-            # fails with a shape error rather than flying badly, which is worse.
-            kind = "conv" if any("conv" in k for k in blob["net"]) else "flat"
-            self.net = ActorCritic(kind, blob.get("config", {}).get("hidden", 128))
-            self.net.load_state_dict(blob["net"])
-            self.net.to(device).eval()
+        # A checkpoint path, or one of the scripted baselines by name.
+        self.net = base.load(checkpoint, device)
         self.reset()
 
     # ------------------------------------------------------------------ state

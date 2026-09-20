@@ -32,6 +32,7 @@ import numpy as np
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse, HTMLResponse
 
+from hadrsim.policy.base import SCRIPTED
 from hadrsim.runner import PolicyRunner, Runner
 from hadrsim.scenario import PRESETS, Scenario
 from hadrsim.viz.render import Recorder
@@ -66,8 +67,9 @@ def policies() -> dict:
     # stay on disk for analysis but would bury the dropdown; the `_best` and final
     # checkpoints are the ones to fly.
     found = [f for f in found if not re.search(r"_i\d{4}$", f.stem)]
-    return {"policies": [{"path": str(f), "name": f.stem,
-                          "size_mb": round(f.stat().st_size / 1e6, 1)} for f in found]}
+    scripted = [{"path": k, "name": f"baseline: {k}", "size_mb": 0.0} for k in SCRIPTED]
+    return {"policies": scripted + [{"path": str(f), "name": f.stem,
+                                     "size_mb": round(f.stat().st_size / 1e6, 1)} for f in found]}
 
 
 @app.get("/presets")

@@ -25,12 +25,13 @@ sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1]))
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
 
 from hadrsim.envs.train import TrainEnv
-from hadrsim.policy.ppo import ActorCritic
+from hadrsim.policy import base
 from hadrsim.scenario import Scenario, autoplace
 from hadrsim.viz.render import Recorder
 
 p = argparse.ArgumentParser()
-p.add_argument("checkpoint", nargs="?", default="checkpoints/overnight_seed0.pt")
+p.add_argument("checkpoint", nargs="?", default="checkpoints/sweep_closeness.pt",
+               help="a checkpoint path, or hover / lawnmower / last_sighting")
 p.add_argument("--city", default="Downtown Berkeley")
 p.add_argument("--paper", action="store_true", help="the 25 m grid instead of a city")
 p.add_argument("--radius", type=float, default=100.0)
@@ -59,15 +60,12 @@ else:
         fidelity=a.fidelity, detector=a.detector, device=dev)
     env.launch_offset_m = a.launch
 
-kind, hidden = "conv", 128
-if not a.untrained:
-    blob = torch.load(a.checkpoint, map_location=dev)
-    kind = "conv" if any("conv" in k for k in blob["net"]) else "flat"
-    hidden = blob.get("config", {}).get("hidden", 128)
-net = ActorCritic(kind, hidden).to(dev)
-if not a.untrained:
-    net.load_state_dict(blob["net"])
-net.eval()
+if a.untrained:
+    from hadrsim.policy.ppo import ActorCritic
+    net, kind = ActorCritic("conv").to(dev).eval(), "conv, untrained"
+else:
+    net = base.load(a.checkpoint, dev)
+    kind = getattr(net, "manifest", {}).get("encoder", getattr(net, "name", "scripted"))
 
 rec = Recorder(env.terrain, scale=max(2, int(420 / max(env.terrain.shape))))
 print(f"{env.terrain.shape[0]}x{env.terrain.shape[1]} cells, {env.clock.max_steps} decisions, "

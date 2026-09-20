@@ -29,6 +29,7 @@ sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1]))
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
 
 from hadrsim.envs.train import TrainEnv
+from hadrsim.eval import evaluate
 from hadrsim.policy.ppo import PPO, PPOConfig
 from hadrsim.reward.compose import DEFAULT
 from hadrsim.scenario import Scenario, autoplace
@@ -50,19 +51,12 @@ def scenario(seed):
                                      episode_seconds=120.0, wind_mps=0.0, seed=seed))
 
 
-@torch.no_grad()
 def _capture(env, net, deterministic: bool = True) -> float:
-    """Capture rate over full episodes -- the number everything is reported in,
-    measured the way it is reported.  Stochastic alongside deterministic, because
-    deterministic falling *below* stochastic is the signature of a policy that has
-    stopped converging, and it is cheaper to see that at iteration 200 than 600."""
-    obs, state = env.reset(), None
-    got = torch.zeros(env.batch, dtype=torch.bool, device=env.device)
-    for _ in range(env.clock.max_steps):
-        act, _, _, state = net.act(obs, state, deterministic=deterministic)
-        obs, _, _, info = env.step(act)
-        got |= info["captured"]
-    return float(got.float().mean())
+    """Capture rate over full episodes, from the shared evaluator -- measured the
+    way it is reported.  Stochastic alongside deterministic, because deterministic
+    falling *below* stochastic is the signature of a policy that has stopped
+    converging, and it is cheaper to see that at iteration 200 than 600."""
+    return evaluate(env, net, deterministic=deterministic).capture / 100.0
 
 
 def run(variant, seed, iters):

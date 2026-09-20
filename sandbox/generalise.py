@@ -27,7 +27,8 @@ sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1]))
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
 
 from hadrsim.envs.train import TrainEnv
-from hadrsim.policy.ppo import ActorCritic
+from hadrsim.eval import evaluate
+from hadrsim.policy import base
 from hadrsim.scenario import PRESETS, Scenario, autoplace
 from hadrsim.world import osm
 
@@ -44,29 +45,14 @@ p.add_argument("--detector", default="geometric", choices=["oracle", "geometric"
 a = p.parse_args()
 
 dev = "cuda" if torch.cuda.is_available() else "cpu"
-blob = torch.load(a.checkpoint, map_location=dev)
-kind = "conv" if any("conv" in k for k in blob["net"]) else "flat"
-net = ActorCritic(kind, blob.get("config", {}).get("hidden", 128)).to(dev)
-net.load_state_dict(blob["net"])
-net.eval()
-print(f"{a.checkpoint}  ({kind} encoder, {a.fidelity} + {a.detector})   launch {a.launch:.0f} m   {a.batch} episodes each\n")
+net = base.load(a.checkpoint, dev)
+kind = getattr(net, "manifest", {}).get("encoder", getattr(net, "name", "scripted"))
+print(f"{a.checkpoint}  ({kind}, {a.fidelity} + {a.detector})   launch {a.launch:.0f} m   {a.batch} episodes each\n")
 
 
 def run(env, policy):
-    obs, state = env.reset(), None
-    z = lambda: torch.zeros(env.batch, dtype=torch.bool, device=env.device)
-    cap, seen, reached, harmed = z(), z(), z(), z()
-    with torch.no_grad():
-        for _ in range(env.clock.max_steps):
-            if policy is None:
-                act = torch.zeros(env.batch, 2, 4, device=env.device)
-            else:
-                act, _, _, state = policy.act(obs, state, deterministic=True)
-            obs, _, _, info = env.step(act)
-            cap |= info["captured"]; reached |= info["reached"]
-            harmed |= info["harmed"]; seen |= obs["seen_by"].any(-1)
-    pct = lambda t: float(t.float().mean()) * 100
-    return pct(cap), pct(seen), pct(reached), pct(harmed)
+    m = evaluate(env, policy)
+    return m.capture, m.seen, m.reached, m.harmed
 
 
 print(f"{'city':<24}{'built':>7}{'nothing':>9}{'policy':>8}{'gain':>7}"

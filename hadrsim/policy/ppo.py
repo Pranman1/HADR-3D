@@ -52,6 +52,8 @@ class ActorCritic(nn.Module):
                  spec_: spec.ObsSpec = spec.DEFAULT_OBS):
         super().__init__()
         self.n_drones = n_drones
+        self.manifest = {"encoder": encoder, "hidden": hidden, "n_drones": n_drones,
+                         "spec_version": spec.SPEC_VERSION}
         self.encoders = nn.ModuleList(
             [encoders.make(encoder, spec_=spec_, out=hidden) for _ in range(n_drones)])
         self.lstm = nn.LSTM(hidden * n_drones, hidden, batch_first=True)
@@ -252,7 +254,13 @@ class PPO:
         return history
 
     def save(self, path: str) -> None:
-        torch.save({"net": self.net.state_dict(), "config": self.cfg.__dict__}, path)
+        """Weights plus a manifest saying what network they are.
+
+        Without the manifest a checkpoint had to be sniffed -- "does it have conv
+        layers?" -- which is how a flat-encoder parity result went unnoticed for a
+        week.  The manifest is what `policy.base.load` reads."""
+        torch.save({"net": self.net.state_dict(), "config": self.cfg.__dict__,
+                    "manifest": self.net.manifest}, path)
 
 
 def _detach(obs: dict) -> dict:

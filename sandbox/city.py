@@ -15,6 +15,7 @@ import torch
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1]))
 
 from hadrsim.envs.train import TrainEnv
+from hadrsim.eval import evaluate
 from hadrsim.policy.ppo import PPO, ActorCritic, PPOConfig
 from hadrsim.scenario import Scenario, autoplace
 
@@ -26,23 +27,11 @@ def build(seed=0, batch=1024, device="cuda"):
 
 
 def report(env, tag, net=None, deterministic=True):
-    obs, state = env.reset(), None
-    B = env.batch
-    z = lambda: torch.zeros(B, dtype=torch.bool, device=env.device)
-    cap, seen, reached, harmed = z(), z(), z(), z()
-    with torch.no_grad():
-        for _ in range(env.clock.max_steps):
-            if net is None:
-                a = torch.zeros(B, 2, 4, device=env.device)
-            else:
-                a, _, _, state = net.act(obs, state, deterministic=deterministic)
-            obs, _, _, info = env.step(a)
-            cap |= info["captured"]; reached |= info["reached"]
-            harmed |= info["harmed"]; seen |= obs["seen_by"].any(-1)
-    pct = lambda t: float(t.float().mean()) * 100
-    print(f"  {tag:<26} capture {pct(cap):5.1f}%   seen {pct(seen):5.1f}%"
-          f"   reached {pct(reached):5.1f}%   harmed {pct(harmed):5.1f}%")
-    return pct(cap)
+    """One printed row. Kept as a name the older scripts import; the loop itself is
+    `hadrsim.eval.evaluate`, so every script counts the same things."""
+    m = evaluate(env, net, deterministic=deterministic)
+    print(m.line(tag))
+    return m.capture
 
 
 if __name__ == "__main__":
