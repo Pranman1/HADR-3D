@@ -13,6 +13,8 @@ generator already gives.
 
 from __future__ import annotations
 
+import zlib
+
 import torch
 
 
@@ -44,7 +46,13 @@ class Rng:
         Lets one subsystem's random draws stop perturbing another's: adding a gust of
         wind should not silently change which cells the fire ignites.
         """
-        mixed = (self.seed * 0x9E3779B1 + (hash(tag) & 0xFFFFFFFF)) & 0x7FFFFFFF
+        # A *stable* hash of the tag.  Python's `hash(str)` is salted per process
+        # (PYTHONHASHSEED), so with it every forked stream -- fire, wind, routes,
+        # sensing -- differed from one run to the next while the top-level seed did
+        # not.  "The same seed gives the same run" held inside a process and failed
+        # across them, which is the one place it matters.  Found by the golden
+        # regression test, 20 Sep.
+        mixed = (self.seed * 0x9E3779B1 + zlib.crc32(tag.encode())) & 0x7FFFFFFF
         return Rng(mixed, self.device)
 
     def state(self) -> torch.Tensor:

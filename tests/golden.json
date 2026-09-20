@@ -1,0 +1,58 @@
+{
+  "paper": {
+    "reward_sum": 867.8385,
+    "parts": {
+      "apparent_size": 0.5723,
+      "capture": 0.0,
+      "control_effort": -0.0368,
+      "coverage": 10.55,
+      "evacuee_harmed": 0.0,
+      "evacuee_in_hlr_fov": 7.5001,
+      "evacuee_in_llr_fov": 1.3332,
+      "fire_proximity": -5.1778,
+      "first_sight": 19.6,
+      "goal_progress": 0.0,
+      "proximity": 105.2209,
+      "reached_safety": 0.0,
+      "role_coordination": 1.5678,
+      "search_coverage": 3.7499,
+      "time_penalty": -0.24
+    },
+    "captured": 0,
+    "reached": 0,
+    "harmed": 0,
+    "drone_pos_sum": 531.865,
+    "human_pos_sum": 164.156,
+    "fire_cells": 195,
+    "obs_self_sum": 15.0604,
+    "obs_raster_sum": 13403.08
+  },
+  "berkeley": {
+    "reward_sum": 300.1516,
+    "parts": {
+      "apparent_size": 0.0118,
+      "capture": 0.0,
+      "control_effort": -0.0368,
+      "coverage": 1.8822,
+      "evacuee_harmed": 0.0,
+      "evacuee_in_hlr_fov": 0.1997,
+      "evacuee_in_llr_fov": 0.075,
+      "fire_proximity": 0.0,
+      "first_sight": 13.0834,
+      "goal_progress": 0.0,
+      "proximity": 34.9021,
+      "reached_safety": 0.0,
+      "role_coordination": 0.0297,
+      "search_coverage": 0.1186,
+      "time_penalty": -0.24
+    },
+    "captured": 0,
+    "reached": 0,
+    "harmed": 0,
+    "drone_pos_sum": 2979.227,
+    "human_pos_sum": 1362.114,
+    "fire_cells": 101,
+    "obs_self_sum": 16.6137,
+    "obs_raster_sum": 20327.537
+  }
+}
