@@ -1,4 +1,4 @@
-# What we built, what we did, what came out — hadr-sim3d, 8–15 Sep 2026
+# What we built, what we did, what came out — hadr-sim3d, 8–20 Sep 2026
 
 Written for someone who has lost the thread. Starts from the paper. Terms are defined
 where they first appear.
@@ -95,9 +95,23 @@ attitude the physics has them at, each camera's cone along its real axis, smoke
 leaning with the wind, shadows. It flies policies by wrapping the *training*
 environment, so what you watch is the world they trained in.
 
-**`sandbox/` — experiments.** `paper_parity.py` (the control: the paper's setup at
-the paper's scale), `reward_sweep.py`, `final_run.py`, `generalise.py` (score a
-policy across every city), `watch.py` (any checkpoint → video).
+**`hadrsim/eval.py` — the one evaluation loop.** Every script that reports a
+number calls `evaluate(env, policy)`; it returns capture, seen, reached, harmed,
+time-to-capture, time-to-first-sighting, time-in-view and the per-term reward sums.
+Four diverging copies used to live in `sandbox/`.
+
+**`hadrsim/policy/base.py` — the policy seam.** A policy is anything with
+`act(obs, state, deterministic)`. Three scripted baselines ship: `hover` (the floor),
+`lawnmower` (the high rescuer sweeps in stripes), `last_sighting` (fly toward
+wherever the team last saw the person). `Learned.load()` reads a checkpoint whose
+manifest says what network it is; `load(name_or_path)` returns any of them, so the
+panel, the evaluator and every script are indifferent to which.
+
+**`sandbox/` — experiments.** `train.py` (one entry point, every hyperparameter a
+flag, wandb-ready; `sweep.yaml` beside it), `paper_parity.py` (the control),
+`reward_sweep.py`, `final_run.py`, `generalise.py` (score a policy across every
+city), `watch.py` (any policy → video). `tests/test_golden.py` is the bit-for-bit
+regression guard; `PENDING.md` is the ordered list of what is not done.
 
 ---
 
