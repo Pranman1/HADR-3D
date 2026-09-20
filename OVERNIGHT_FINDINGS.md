@@ -438,6 +438,30 @@ last sighting is map-agnostic by construction, so "it generalises" is only a cla
 about learning if the learned policy generalises *better than the rule*. That run is
 in progress (`logs/generalise_last_sighting.log`).
 
+**Cross-city, the rule beside the learned policy** (256 episodes each, deterministic):
+
+| city | last_sighting rule | learned (sweep_closeness) | learned − rule |
+|---|---|---|---|
+| Downtown Berkeley | 45.7% | 44.9% | -0.8 |
+| UC Berkeley campus | 52.7% | 40.6% | -12.1 |
+| SF Financial District | 40.2% | 45.3% | +5.1 |
+| Manhattan Midtown | 46.9% | 34.4% | -12.5 |
+| Chicago Loop | 43.8% | 37.1% | -6.7 |
+| Barcelona Eixample | 47.7% | 43.4% | -4.3 |
+| Paris Le Marais | 37.9% | 44.5% | +6.6 |
+| Venice San Marco | 41.4% | 47.7% | +6.3 |
+| Tokyo Shinjuku | 41.0% | 49.6% | +8.6 |
+| Oakland Downtown | 40.6% | 37.9% | -2.7 |
+
+Held-out mean gain over each city's floor: **rule +35.4, learned +33.6.** The rule
+generalises at least as well -- as it must, being map-agnostic by construction. So
+the cross-city table is evidence about the *task* (at this scale, closing is the whole
+problem and a closing rule solves it everywhere), not evidence that the network
+learned to search. The generalisation claim in section 10 is withdrawn in that form.
+What remains true: the learned policy is roughly as good as the best hand rule we
+wrote, on every city, and beats it on four of ten. That is a floor to build from, not
+a result to lead with.
+
 What would make the learned policy earn its place: a larger map or a narrower
 camera, where search is not free; a launch further out, where the 60 m gap already
 shows; or the person moving unpredictably, where anticipation beats pursuit.

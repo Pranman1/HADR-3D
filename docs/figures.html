@@ -76,9 +76,9 @@
 </header>
 
 <div class="kpis">
-  <div class="kpi"><div class="l">Held-out gain, mean of 9 unseen cities</div><div class="v hero">+33.6<small>pts</small></div><div class="d">worst city +29.3 · 256 episodes each</div></div>
+  <div class="kpi"><div class="l">Held-out gain, mean of 9 unseen cities</div><div class="v hero">+33.6<small>pts</small></div><div class="d">a 30-line hand-written rule: +35.4 on the same cities</div></div>
   <div class="kpi"><div class="l">Paper-scale control, before → after reward fixes</div><div class="v">6.2 → 37.1%</div><div class="d">same learner, same map; only the reward changed</div></div>
-  <div class="kpi"><div class="l">Best reward balance vs our old defaults</div><div class="v">3.1×</div><div class="d">45.3% vs 14.6%, full fidelity</div></div>
+  <div class="kpi"><div class="l">Best reward balance vs our old defaults</div><div class="v">3.1×</div><div class="d">45.3% vs 14.6% — and a hand rule reaches 45.7%</div></div>
   <div class="kpi"><div class="l">Evacuee detour around a fire on its route</div><div class="v">99 m</div><div class="d">straight line 36 m · 0 steps in fire</div></div>
 </div>
 
@@ -93,20 +93,20 @@
 
 <!-- ================================================================ Fig 2 -->
 <figure>
-  <h2>2 · One reward idea moved the city result more than everything else combined</h2>
+  <h2>2 · One reward idea moved the city result more than everything else — to the level of a thirty-line rule</h2>
   <p class="sub">Seven reward balances, each trained 150 iterations on Downtown Berkeley at full fidelity (real quadrotor dynamics, a detector that can miss). Do-nothing floor 9.4%.</p>
   <svg id="f2" viewBox="0 0 900 300" role="img" aria-label="Bar chart: capture rate by reward balance"></svg>
-  <figcaption><b>Read:</b> paying for how large the person is in the low rescuer's camera — closeness, only while in view — reached 45.3%. Every other balance sat between 3.6% and 21.7%. The paper's LLR detection window is 2.5 m, so in the paper <i>detection was closeness</i>; ours sees 45 m, so closeness has to be paid for separately. Removing proximity entirely halves the gain: it is what pulls the drone toward the last known position once the person is lost.</figcaption>
+  <figcaption><b>Read:</b> paying for how large the person is in the low rescuer's camera — closeness, only while in view — reached 45.3%. Every other balance sat between 3.6% and 21.7%. The green bar is not a learned policy: it is a hand-written rule, <em>fly toward wherever the team last saw the person</em>, and it reaches 45.7%. At this map scale the task is closing, and a rule that closes does as well as anything trained so far. The paper's LLR detection window is 2.5 m, so in the paper <i>detection was closeness</i>; ours sees 45 m, so closeness has to be paid for separately. Removing proximity entirely halves the gain: it is what pulls the drone toward the last known position once the person is lost.</figcaption>
   <details><summary>Table view</summary><table id="t2"></table></details>
 </figure>
 
 <!-- ================================================================ Fig 3 -->
 <figure>
-  <h2>3 · Trained on one city, it works on nine it never saw</h2>
+  <h2>3 · Trained on one city, it works on nine it never saw — and so does the rule</h2>
   <p class="sub">The closeness policy, trained on Downtown Berkeley only, scored on every city at full fidelity, 256 episodes each. Each city against its own do-nothing floor. Sorted by gain.</p>
-  <div class="legend"><span><i class="dot" style="background:var(--s1-light)"></i>do nothing</span><span><i class="dot" style="background:var(--s1)"></i>closeness policy</span></div>
+  <div class="legend"><span><i class="dot" style="background:var(--s1-light)"></i>do nothing</span><span><i class="dot" style="background:var(--s1)"></i>learned (closeness)</span><span><i class="dot" style="background:var(--s3)"></i>hand-written rule (last sighting)</span></div>
   <svg id="f3" viewBox="0 0 900 400" role="img" aria-label="Dumbbell chart: do-nothing floor versus policy capture rate per city"></svg>
-  <figcaption><b>Read:</b> every held-out city lands between +29 and +39 points; the trained-on city is not the best. A policy that had memorised Berkeley's street pattern would collapse on Manhattan's 400 m towers or Venice's alleys. This is a question the 2D grid could never ask.</figcaption>
+  <figcaption><b>Read:</b> the learned policy gains +29 to +39 points on every held-out city — and the hand-written rule gains +30 to +45 on the same cities (held-out mean: learned +33.6, rule +35.4). A rule that follows the last sighting is map-agnostic by construction, so this table says the <em>task</em> rewards closing everywhere, not that the network learned to search. The learned policy matches the rule and beats it on four cities of ten. Still a question the 2D grid could not ask; not yet a learning result.</figcaption>
   <details><summary>Table view</summary><table id="t3"></table></details>
 </figure>
 
@@ -148,7 +148,7 @@ function hbars(svg, data, { max, floor, labelW = 190, ref = [] }) {
   svg.appendChild(ax);
   data.forEach((d, i) => {
     const y = top + i * rowH + (rowH - bar) / 2;
-    const colour = d.emph ? css("--s1") : css("--ref");
+    const colour = d.emph ? css("--s1") : d.rule ? css("--s3") : css("--ref");
     const w = Math.max(0, sx(d.v) - sx(0));
     // rounded data-end, square at the baseline
     const p = `M${sx(0)},${y} h${Math.max(0, w - 4)} a4,4 0 0 1 4,4 v${bar - 8} a4,4 0 0 1 -4,4 h-${Math.max(0, w - 4)} z`;
@@ -181,6 +181,7 @@ table("#t1", ["configuration", "capture"], f1.map(d => [d.name, d.v.toFixed(1) +
 // ---- Fig 2
 const f2 = [
   { name: "closeness (apparent_size 20, proximity 5)", v: 45.3, emph: true },
+  { name: "hand-written rule: fly to last sighting", v: 45.7, rule: true },
   { name: "closeness only (proximity 0)", v: 21.7 }, { name: "paper's weights only", v: 19.2 },
   { name: "search first", v: 17.2 }, { name: "as shipped (our old defaults)", v: 14.6 },
   { name: "quiet proximity", v: 14.3 }, { name: "outcome heavy", v: 3.6 },
@@ -190,9 +191,16 @@ table("#t2", ["reward balance", "capture", "gain vs floor"], f2.map(d => [d.name
 
 // ---- Fig 3 dumbbell
 const cities = [
-  ["SF Financial District", 6.2, 45.3], ["Tokyo Shinjuku", 10.5, 49.6], ["Venice San Marco", 10.2, 47.7],
-  ["Paris Le Marais", 7.4, 44.5], ["Downtown Berkeley (trained)", 8.2, 44.9], ["UC Berkeley campus", 9.4, 40.6],
-  ["Barcelona Eixample", 12.9, 43.4], ["Manhattan Midtown", 4.7, 34.4], ["Chicago Loop", 7.8, 37.1], ["Oakland Downtown", 8.6, 37.9],
+  ["Downtown Berkeley (trained)", 7.8, 44.9, 45.7],
+  ["UC Berkeley campus", 8.2, 40.6, 52.7],
+  ["SF Financial District", 6.6, 45.3, 40.2],
+  ["Manhattan Midtown", 8.2, 34.4, 46.9],
+  ["Chicago Loop", 8.6, 37.1, 43.8],
+  ["Barcelona Eixample", 9.0, 43.4, 47.7],
+  ["Paris Le Marais", 8.2, 44.5, 37.9],
+  ["Venice San Marco", 11.3, 47.7, 41.4],
+  ["Tokyo Shinjuku", 9.0, 49.6, 41.0],
+  ["Oakland Downtown", 4.7, 37.9, 40.6],
 ].sort((a, b) => (b[2] - b[1]) - (a[2] - a[1]));
 (function () {
   const svg = $("#f3"), W = 900, top = 12, rowH = 34, x0 = 230, x1 = W - 90, max = 60;
@@ -201,20 +209,21 @@ const cities = [
   const ax = el("g", { class: "ax" });
   for (let v = 0; v <= max; v += 10) { ax.appendChild(el("line", { x1: sx(v), x2: sx(v), y1: top, y2: top + cities.length * rowH })); ax.appendChild(el("text", { x: sx(v), y: top + cities.length * rowH + 18, "text-anchor": "middle" }, v + "%")); }
   svg.appendChild(ax);
-  cities.forEach(([name, a, b], i) => {
+  cities.forEach(([name, a, b, r], i) => {
     const y = top + i * rowH + rowH / 2, trained = name.includes("trained");
     svg.appendChild(el("text", { class: "lbl", x: x0 - 12, y: y + 4, "text-anchor": "end", fill: css(trained ? "--ink-2" : "--ink") }, name));
     svg.appendChild(el("line", { x1: sx(a), x2: sx(b), y1: y, y2: y, stroke: css("--s1-light"), "stroke-width": 2, "stroke-linecap": "round" }));
     svg.appendChild(el("circle", { cx: sx(a), cy: y, r: 5, fill: css("--s1-light"), stroke: css("--surface"), "stroke-width": 2 }));
     svg.appendChild(el("circle", { cx: sx(b), cy: y, r: 5, fill: css("--s1"), stroke: css("--surface"), "stroke-width": 2 }));
-    svg.appendChild(el("text", { class: "lbl", x: sx(b) + 10, y: y + 4 }, `+${(b - a).toFixed(1)}`));
+    svg.appendChild(el("circle", { cx: sx(r), cy: y, r: 5, fill: css("--s3"), stroke: css("--surface"), "stroke-width": 2 }));
+    svg.appendChild(el("text", { class: "lbl", x: sx(Math.max(b, r)) + 10, y: y + 4 }, `+${(b - a).toFixed(1)} · rule +${(r - a).toFixed(1)}`));
     const hit = el("rect", { class: "hit", x: 0, y: top + i * rowH, width: W, height: rowH, tabindex: 0 });
-    const show = ev => showTip(ev, [row(b.toFixed(1) + "%", "closeness policy", css("--s1")), row(a.toFixed(1) + "%", "do nothing", css("--s1-light")), row("+" + (b - a).toFixed(1), name)]);
+    const show = ev => showTip(ev, [row(b.toFixed(1) + "%", "learned (closeness)", css("--s1")), row(r.toFixed(1) + "%", "hand-written rule", css("--s3")), row(a.toFixed(1) + "%", "do nothing", css("--s1-light")), row(name, "")]);
     hit.addEventListener("pointermove", show); hit.addEventListener("focus", () => show({ clientX: 300, clientY: 300 }));
     hit.addEventListener("pointerleave", hideTip); hit.addEventListener("blur", hideTip);
     svg.appendChild(hit);
   });
-  table("#t3", ["city", "do nothing", "policy", "gain"], cities.map(([n, a, b]) => [n, a.toFixed(1) + "%", b.toFixed(1) + "%", "+" + (b - a).toFixed(1)]));
+  table("#t3", ["city", "do nothing", "learned", "rule"], cities.map(([n, a, b, r]) => [n, a.toFixed(1) + "%", b.toFixed(1) + "%", r.toFixed(1) + "%"]));
 })();
 
 // ---- Fig 4 lines

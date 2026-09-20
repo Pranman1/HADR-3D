@@ -232,8 +232,10 @@ its own do-nothing floor:
 | Chicago Loop | 7.8% | 37.1% | +29.3 |
 | Oakland Downtown | 8.6% | 37.9% | +29.3 |
 
-**Held-out mean +33.6 points across nine unseen cities; worst +29.3.** It learned to
-search, not a street pattern.
+**Held-out mean +33.6 points across nine unseen cities; worst +29.3.** But the
+thirty-line `last_sighting` rule scores **+35.4** on the same nine cities. The table
+shows the task rewards closing everywhere, not that the network learned to search;
+the learned policy matches the rule, beating it on four cities of ten.
 
 ### Against a hand-written rule (added 20 Sep)
 
