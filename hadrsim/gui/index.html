@@ -81,6 +81,19 @@
     <div><label>People</label><input type="number" id="humans" value="1" min="1" max="12"></div>
     <div><label>Drones</label><input type="number" id="drones" value="2" min="0" max="6"></div>
   </div>
+  <div class="row">
+    <div><label>Flight physics</label>
+      <select id="fidelity">
+        <option value="quadrotor">quadrotor (real)</option>
+        <option value="point_mass">point mass</option>
+        <option value="kinematic">kinematic (paper)</option>
+      </select></div>
+    <div><label>Detector</label>
+      <select id="detector">
+        <option value="geometric">geometric (can miss)</option>
+        <option value="oracle">oracle (perfect)</option>
+      </select></div>
+  </div>
   <label>Policy</label>
   <select id="policy"><option value="none">none — drones stay grounded</option></select>
   <div class="hint">A checkpoint flies both rescuers. The 3D view shows what each
@@ -342,6 +355,8 @@ $("build").onclick = () => {
     n_drones: +$("drones").value,
     seed: +$("seed").value,
     policy: $("policy").value,
+    fidelity: $("fidelity").value,
+    detector: $("detector").value,
   }}));
 };
 

@@ -167,14 +167,15 @@ class PolicyRunner:
     The crowd view is `Runner`, and has no drones.
     """
 
-    def __init__(self, scenario, checkpoint: str | None = None, device: str = "cpu"):
+    def __init__(self, scenario, checkpoint: str | None = None, device: str = "cpu",
+                 fidelity: str = "quadrotor", detector: str = "geometric"):
         from hadrsim.envs.train import TrainEnv
         from hadrsim.policy import base
 
         # Full fidelity: the quadrotor tier and the detector that can miss -- the world
         # the policies since 14 Sep were trained in.  Showing them anything easier would
         # be showing a policy flying a world it never learned.
-        self.env = TrainEnv(scenario, batch=1, fidelity="quadrotor", detector="geometric",
+        self.env = TrainEnv(scenario, batch=1, fidelity=fidelity, detector=detector,
                             device=device)
         self.scenario = self.env.scenario
         self.terrain = self.env.terrain

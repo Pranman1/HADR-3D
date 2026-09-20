@@ -1,0 +1,19 @@
+# wandb sweep over the learner's own knobs -- the ones never varied so far.
+#   wandb sweep sandbox/sweep.yaml          -> prints a sweep id
+#   wandb agent <id>                        -> one per GPU
+program: sandbox/train.py
+method: bayes
+metric: {name: eval/best, goal: maximize}
+parameters:
+  lr:            {values: [1e-4, 2e-4, 3e-4, 5e-4]}
+  entropy:       {values: [0.005, 0.01, 0.02]}
+  entropy-final: {values: [0.0, 0.002, 0.005]}
+  epochs:        {values: [1, 2, 4]}
+  horizon:       {values: [30, 60, 120]}
+  clip:          {values: [0.1, 0.2, 0.3]}
+  hidden:        {values: [128, 256]}
+  apparent-size: {values: [10, 20, 40]}
+  proximity:     {values: [0, 2, 5, 10]}
+  seed:          {values: [0, 1, 2, 3, 4]}
+  iters:         {value: 200}
+  wandb:         {value: hadr-sim3d}

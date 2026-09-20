@@ -208,7 +208,9 @@ async def live(ws: WebSocket) -> None:
         if pick == "none":
             runner = await asyncio.to_thread(Runner, sc)
         else:
-            runner = await asyncio.to_thread(PolicyRunner, sc, pick, "cpu")
+            runner = await asyncio.to_thread(
+                PolicyRunner, sc, pick, "cpu",
+                cfg.get("fidelity", "quadrotor"), cfg.get("detector", "geometric"))
         t = runner.terrain
         await ws.send_text(json.dumps({
             "type": "scenario",

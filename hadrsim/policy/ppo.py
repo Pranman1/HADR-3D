@@ -227,22 +227,35 @@ class PPO:
                      "std": float(self.net.log_std.detach().exp().mean())}
         return stats
 
-    def train(self, iterations: int, log_every: int = 5, on_log=None) -> list:
+    def train(self, iterations: int, log_every: int = 5, on_log=None, wandb_run=None,
+              start: int = 0, total: int | None = None) -> list:
+        """Train for `iterations` collect-update cycles.
+
+        `on_log(row)` is called every `log_every` iterations with the row printed;
+        `wandb_run` (a `wandb.init()` handle) receives every row, so a sweep agent
+        can drive this loop without the loop knowing about wandb.
+
+        `start` and `total` let a caller train in blocks -- evaluate, train more --
+        while the entropy anneal still runs over the *whole* run.  Without them each
+        block restarted the schedule from the top, which a smoke run made visible."""
         history = []
+        total = total or iterations
         for i in range(1, iterations + 1):
             buf, last_value, info, start_state = self.collect()
             adv, returns = self.advantages(buf, last_value)
-            stats = self.update(buf, adv, returns, start_state, i / max(iterations, 1))
+            stats = self.update(buf, adv, returns, start_state, (start + i) / max(total, 1))
 
             row = {
-                "iteration": i,
-                "steps": i * self.cfg.horizon * self.env.batch,
+                "iteration": start + i,
+                "steps": (start + i) * self.cfg.horizon * self.env.batch,
                 "reward": float(torch.stack(buf["reward"]).mean()),
                 "captured": float(info.get("captured", torch.zeros(1)).float().mean()),
                 "reached": float(info.get("reached", torch.zeros(1)).float().mean()),
                 **stats,
             }
             history.append(row)
+            if wandb_run is not None:
+                wandb_run.log(row, step=start + i)
             if i % log_every == 0 or i == 1:
                 print(f"  {i:>4}  steps {row['steps']:>9,}  reward {row['reward']:+8.3f}"
                       f"  captured {row['captured']*100:5.1f}%"

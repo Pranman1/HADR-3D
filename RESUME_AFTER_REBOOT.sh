@@ -21,4 +21,6 @@ PY
 mkdir -p logs checkpoints
 echo "starting the reward-weight sweep (5 balances x 150 iterations, ~2 h)"
 nohup python -u sandbox/reward_sweep.py 150 > logs/reward_sweep.log 2>&1 &
+# (if you chain anything after this, wait on `pgrep -f "^python -u sandbox/reward_sweep.py"` --
+#  the anchored form; an unanchored pgrep matches lingering shell wrappers forever)
 echo "  pid $!   watch with: tail -f logs/reward_sweep.log"
