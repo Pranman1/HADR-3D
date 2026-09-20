@@ -923,6 +923,25 @@ airframe is drawn ×8 by default (slider, labelled). Cones are never scaled.
 
 ---
 
+## 11e. The seams, as built  *(20 Sep)*
+
+| seam | how you swap it | what exists |
+|---|---|---|
+| policy | `policy.base.load(name_or_path)` — anything with `act(obs, state, deterministic)` | `hover`, `lawnmower`, `last_sighting`, any checkpoint (manifest says encoder / hidden / contract version) |
+| evaluation | `eval.evaluate(env, policy)` — the only loop that reports numbers | capture, seen, reached, harmed, time-to-capture, first-seen, in-view, reward per term |
+| detector | `detector.make(name, camera)` | `oracle`, `geometric`; learned CNN slot empty |
+| flight | `Drone(fidelity=…)` — also a dropdown in the panel | kinematic, point-mass, quadrotor |
+| airframe | `airframes.BY_NAME` | X500 V2, Crazyflie |
+| reward | named terms + a weights dict; every term's contribution recorded | 15 terms |
+| city | preset (pinned lat/lon) or any bbox; yaml scenarios | 10 cities cached at 100 m |
+| training | `sandbox/train.py` — every hyperparameter a flag; `sweep.yaml` for wandb | keep-best checkpoints, evaluation every 25 |
+| regression guard | `tests/test_golden.py` — signature of a fixed rollout | re-record only for a deliberate behaviour change |
+
+What is *not* a seam: the number of drones (two, by the paper's argument), the person
+model (one class), and the one-person-per-world contract.
+
+---
+
 ## 12. How we compare against the paper
 
 Not "do we beat it." Our simulator is harder, so raw numbers will not match and should
