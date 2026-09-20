@@ -180,9 +180,11 @@ Paper-scale setup, 25 m grid, 40 pairs, 4 fire origins, deterministic capture:
 | trained, **after** the six fixes | **37.1%** |
 | paper Env-IV (its own 2D sim) | 66.0% |
 
-Deterministic now beats stochastic — the signature of a policy that has converged.
-The gap to 66% is real and not yet explained; this control used the flat encoder and
-the old reward and is due a rerun.
+Deterministic beat stochastic in that run — the signature of a converged policy. A
+rerun with the CNN encoder (20 Sep, one seed) did *not* converge: 7.0% deterministic,
+22.9% stochastic. So the 37.1% is a flat-encoder, single-seed number that has not been
+reproduced with the CNN; five seeds per encoder are needed before either is quoted.
+The gap to 66% is real and not yet explained.
 
 ### The reward sweep (Berkeley, full fidelity, 150 iterations each, floor 9.4%)
 

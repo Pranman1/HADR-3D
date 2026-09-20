@@ -466,6 +466,27 @@ What would make the learned policy earn its place: a larger map or a narrower
 camera, where search is not free; a launch further out, where the 60 m gap already
 shows; or the person moving unpredictably, where anticipation beats pursuit.
 
+## 12. The control, rerun with the CNN  *(20 Sep)*
+
+PENDING item 4: the 37.1% paper-scale control was a flat-encoder run. Rerun once
+with the CNN encoder, same reward terms (the paper's, with the one-shot fixes),
+300 iterations, seed 0:
+
+```
+                          capture
+do nothing                  4.4%
+untrained (one draw)       14.9%
+trained, deterministic      7.0%
+trained, stochastic        22.9%
+```
+
+Deterministic far below stochastic: the run did not converge, and its considered
+answer is barely above doing nothing. This is one seed, and peaks across seeds have
+ranged 19–45% on the city, so it does not show the CNN is worse on the grid -- but it
+does mean **the 37.1% control has not been reproduced with the CNN**, and the flat
+run that produced it may itself have been a fortunate draw. Both encoders need five
+seeds each before either number is quoted. That is the wandb sweep.
+
 ---
 
 ## Caveats, honestly

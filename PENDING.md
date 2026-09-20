@@ -19,8 +19,9 @@ Ordered by what I would do next. Each line says why, and roughly how big.
 3. **Find the decay.** Every run peaks by iteration 25–150 and slides toward the
    floor. Suspect: residual `proximity` pull toward loitering. Keep-best checkpoints
    are the workaround, not the fix. *One sweep.*
-4. **Paper-scale control with the CNN and the current reward.** The 37.1% figure is
-   flat-encoder, old reward. *One run, ~1 h.*
+4. **Paper-scale control: five seeds per encoder.** One CNN rerun (20 Sep) gave 7.0%
+   deterministic / 22.9% stochastic — not converged — against the flat run's 37.1%.
+   Neither is quotable from one seed. *Part of the wandb sweep.*
 5. **Honest hazard map.** The raster's fire and smoke channels are exact within the
    camera footprint — a disc, not line of sight — so a roof does not hide a fire from
    the policy. Ray-march them like the person, add detector noise. *~1 day; changes
