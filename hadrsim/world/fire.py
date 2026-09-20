@@ -63,7 +63,12 @@ NEIGHBOURS = (
 @dataclass
 class FireParams:
     spread_prob: float = 0.09      # per tick, per neighbour, no wind, dry fuel
-    wind_boost: float = 2.5        # how much a full downwind alignment multiplies it
+    # Wind used to multiply spread by 2.5 and embers scaled with it too, so the two
+    # compounded: a five metre breeze took a fire from one percent of a 360 m block
+    # to twenty-two percent in ninety seconds. Real wind-driven urban fires are fast,
+    # but not that fast, and a hazard that consumes the map before anyone can act is
+    # not a hazard anyone can be trained against.
+    wind_boost: float = 1.8        # how much a full downwind alignment multiplies it
     wind_ref_mps: float = 5.0      # the speed at which `wind_boost` is reached
     burn_rate: float = 0.025       # fuel consumed per second while burning
     moisture_damping: float = 0.9  # how strongly moisture suppresses ignition
@@ -79,7 +84,7 @@ class FireParams:
     # Brands thrown downwind. Small probability, long range: this is what gets a
     # fire across a road, and without it a correct fuel map produces a fire that
     # burns one block and stops.
-    spot_prob: float = 0.020
+    spot_prob: float = 0.008
     spot_range_m: float = 14.0
     spot_spread_m: float = 7.0
 

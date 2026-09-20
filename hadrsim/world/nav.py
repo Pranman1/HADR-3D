@@ -40,7 +40,8 @@ def distance_field(
 ) -> torch.Tensor:
     """(B, W, H) cost-to-go to the goal, by the cheapest walkable path.
 
-    `walkable` is (W, H) and shared -- every environment walks the same city.
+    `walkable` is (W, H) and shared -- every environment walks the same city -- or
+    (B, W, H) when something that differs per environment, like a fire, is blocking.
     `goal_xy` is (B, 2) in cells. Unreachable cells come back as UNREACHABLE, not inf,
     so that arithmetic on the field does not produce NaN.
 
@@ -49,7 +50,7 @@ def distance_field(
     is how a route bends around a fire instead of walking into it.  With no cost the
     result is plain distance in metres.
     """
-    w, h = walkable.shape
+    w, h = walkable.shape[-2:]
     b = len(goal_xy)
     device = walkable.device
     step = cell_size_m
@@ -59,7 +60,9 @@ def distance_field(
     dist[idx, goal_xy[:, 0].long(), goal_xy[:, 1].long()] = 0.0
 
     blocked = ~walkable
-    dist = dist.masked_fill(blocked[None], UNREACHABLE)
+    if blocked.dim() == 2:
+        blocked = blocked[None].expand(b, w, h)
+    dist = dist.masked_fill(blocked, UNREACHABLE)
 
     # A shortest path never needs more steps than the map's diagonal, and relaxing in
     # both sweep directions each round roughly halves the rounds needed.
@@ -73,7 +76,7 @@ def distance_field(
         best = dist
         for dx, dy, step_cost in NEIGHBOURS:
             best = torch.minimum(best, _shift(dist, dx, dy) + step_cost * price)
-        dist = best.masked_fill(blocked[None], UNREACHABLE).clamp_max(UNREACHABLE)
+        dist = best.masked_fill(blocked, UNREACHABLE).clamp_max(UNREACHABLE)
         if torch.equal(dist, prev):
             break
 

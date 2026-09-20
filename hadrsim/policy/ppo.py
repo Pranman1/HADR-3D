@@ -222,7 +222,7 @@ class PPO:
             self.opt.step()
             stats = {"policy_loss": policy_loss.item(), "value_loss": value_loss.item(),
                      "entropy": entropy.mean().item(), "beta": beta,
-                     "std": float(self.net.log_std.exp().mean())}
+                     "std": float(self.net.log_std.detach().exp().mean())}
         return stats
 
     def train(self, iterations: int, log_every: int = 5, on_log=None) -> list:

@@ -905,6 +905,24 @@ headless, ~17 fps live.
 
 ---
 
+## 11d. The 3D view  *(built 11 Sep)*
+
+`gui/scene3d.js`, vendored three.js, no internet needed. Everything drawn is what the
+simulator computes, not an illustration of it:
+
+| Drawn | Source of truth |
+|---|---|
+| each camera's cone | `fov.look_direction(camera, quat)` — the axis the detector tests, through the airframe's attitude |
+| airframe attitude | the drone's own forward/up vectors from its quaternion |
+| the airframe | X500 V2 proportions from `airframes.py` (0.25 m arms), 10-inch props, gimbal on the nose (LLR, 20° down) or belly (HLR) |
+| smoke lean | the live `Wind.velocity` |
+| building heights | `terrain.solid_top` |
+
+The one concession is scale: a 0.5 m aircraft is invisible on a 200 m block, so the
+airframe is drawn ×8 by default (slider, labelled). Cones are never scaled.
+
+---
+
 ## 12. How we compare against the paper
 
 Not "do we beat it." Our simulator is harder, so raw numbers will not match and should
@@ -931,6 +949,10 @@ Then run our network on it and report the paper's own four numbers:
 
 (Env-I is the training setup unchanged; II randomises the person's start and end; III
 randomises the fire; IV randomises both.)
+
+Our 40-pair control corresponds to **Env-IV**, and currently sits at 37.1% against its
+66% — see §13b, which also explains why the earlier 65% figure for this section had to
+be withdrawn.
 
 **The bar is the same ballpark on all four numbers, and the same ordering across the four
 environments** — notably Env-III best on capture time, first sighting, and time in view.
@@ -981,11 +1003,13 @@ Every deliberate difference, why, and what it costs. This is the table to hand G
 | 4 | policy outputs a waypoint | policy outputs a velocity setpoint | it is the native PX4 offboard message, so sim-to-real needs no translation | policy can no longer fly aggressively — deliberate |
 | 5 | detection binary and noiseless inside a window | range falloff, misses, false alarms, confidence, staleness | this is the actual research contribution | policy must handle uncertainty; harder to train |
 | 6 | reward reads ground truth independently of the observation | reward may only read what the policy reads | otherwise degrading vision changes nothing, because the answer arrives via the reward | rewards must be rewritten, not ported |
+| 6b | LLR "detects" inside a 5×5 window (2.5 m), so detection *is* closeness | detection (45 m ahead) and closeness (`apparent_size`: the person's height over distance, only while in view) are paid separately | with a long-range sensor, paying for detection alone paid for watching from across the street: 97% seen, 18% captured | one more term; on hardware it is the bounding-box height |
 | 7 | fire never burns out, spreads through buildings, unseeded RNG | fuel, moisture, burnout, wind direction, buildings block, seeded | the current fire eventually fills the map and is irreproducible | more parameters to set |
 | 8 | no smoke | 3D smoke plume, blocks the high drone, slows the person | smoke occlusion is the paper's premise, currently only asserted | a new subsystem |
 | 9 | person's panic level fixed or scheduled | γ driven by fire distance, smoke, exit visibility, time | answers the paper's own "abstracted human behavior" limitation | needs calibrating |
 | 10 | person moves on grid cells | social force motion layer, continuous | bodies have momentum and avoid walls | one more model to tune |
 | 11 | person sees fire through buildings | occlusion-checked | it is simply a bug | — |
+| 11b | fire is a wall to the evacuee (`Fire.can_overlap` false) | **kept exactly**, plus: burnt ground priced at 21x, a 12 m stand-off band, and a fallback when every route is cut | the paper's fire never goes out, so it never had to decide about ash | a person is never stranded, at the cost of one more parameter |
 | 12 | person follows the drone along an ideal A* path | follows with lag, imperfectly, can lose the drone in smoke | the ideal-path assumption inflates the improvement number | improvement numbers may drop |
 | 13 | perfect instant communication between drones | a comms layer with delay, loss, and bandwidth | the paper names perfect comms as a key limitation | one more thing to tune |
 | 14 | one network flying both drones | one network now, structured for two later | real drones are separate machines | none now |
@@ -1004,6 +1028,65 @@ Every deliberate difference, why, and what it costs. This is the table to hand G
 | Raw camera images in the training loop | ~100× slower. The single decision that keeps this finishable |
 | Rotor-level control learned by the policy | the research question is search and coordination, not learning to fly |
 | A physics engine (PhysX) for the drones | our drones never touch anything; collision solving is the one part we do not need and the part that would cost GPU parallelism |
+
+---
+
+## 13b. What the overnight run found  *(measured, 11 Sep)*
+
+Full write-up in `OVERNIGHT_FINDINGS.md`. The short version is that **the learner was
+never the problem — five things in the environment and the reward were.**
+
+| # | What was wrong | How it was found | Effect |
+|---|---|---|---|
+| 1 | every environment in the batch ran the *same* episode — one start, one exit, one fire | an untrained network scored 100% | the policy had one trajectory to memorise, not a task. Now 40 O/D pairs and 4 fire origins, as in the paper |
+| 2 | routes were longer than the evacuee could walk in an episode | reached-safety was 6% | routes are now sized to the episode; reaching went 6% → 86% |
+| 3 | `searched` and `first_seen` were wiped every step by leftover reset code | hovering earned `coverage` forever; `first_sight` paid 20/step for staring | staring was worth more than twenty rescues. **This is the whole explanation for "seen 100%, captured 0%"** |
+| 4 | `reached_safety` and `evacuee_harmed` read latched flags, so they paid every step after the event | ~8,600 per rescue against 200 for the capture | both now pay once, on the edge |
+| 5 | `goal_progress` was gated on the one-step `captured` edge | contributed 0.19 points out of 760 | nothing had ever paid for the half of a rescue after reaching someone |
+| 6 | **episodes kept being stepped, paid and trained on after they ended** | 100% of episodes end early; 27 of every 100 steps were post-episode | the single largest fix — see below |
+
+Finished environments now freeze. On the paper-scale control that took deterministic
+capture from **6.2% to 37.1%**, and made deterministic beat stochastic — the signature
+of a policy that has actually converged rather than one stumbling into answers by
+noise.
+
+### A number that had to be retracted
+
+The previously reported **65% paper parity was measured on a single origin/destination
+pair**, where an *untrained* network scores 91% because the drone base sits on the one
+fixed route. It was never comparable to anything.
+
+To be fair to the paper: its Env-I *is* its training setup unchanged, so a fixed pair
+is not by itself wrong — ours is simply degenerate in a way theirs is not. The
+like-for-like comparison for a 40-pair run is **Env-IV's 66%**, not Env-I's 71%.
+The honest control:
+
+| | capture |
+|---|---|
+| do nothing | 6.1% |
+| untrained, averaged over 8 initialisations | 7.3% ± 4.5 (range 3.7–16.0) |
+| **trained, deterministic** | **37.1%** |
+| paper Env-IV (person *and* fire randomised) | 66.0% |
+| paper Env-I (training setup unchanged) | 71.0% |
+
+A single untrained draw scores anywhere from 3.7% to 32.3%, so **the untrained
+baseline has to be averaged** — one draw is not a baseline.
+
+### Also built
+
+- A **3D view in the control panel**: buildings extruded to real heights, drones at
+  altitude, and each camera's frustum drawn as a cone that turns green when it has the
+  evacuee. That last is the thing a plan view cannot show — whether a roof is between
+  a lens and a person. three.js is vendored, so it works offline.
+- The panel now **flies a real checkpoint**, by wrapping the *training* environment at
+  batch 1 rather than reimplementing the physics. What you watch is the world the
+  policy trained in.
+- **Ten OSM cities pinned to coordinates, not names.** "Eixample, Barcelona" geocoded
+  8 km outside the district and gave a map 2.7% built where the real Eixample is 47%.
+  A map that changes when a gazetteer is edited cannot carry a result.
+- `sandbox/generalise.py` (score a checkpoint across every city) and
+  `sandbox/reward_sweep.py` (the weights were tuned against the broken reward and have
+  never been revisited — this is the recommended next run).
 
 ---
 

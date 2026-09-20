@@ -67,13 +67,21 @@ PAPER_WEIGHTS = {
 }
 
 
-def build(batch: int = 1024, device: str = "cuda", **over) -> TrainEnv:
+# The paper draws each episode from forty origin/destination pairs and four fire
+# origins.  Running a single fixed pair instead is a *much* easier problem -- one
+# trajectory to memorise rather than a task to generalise -- so a number measured
+# that way is not comparable to the published 71%, however close it lands.  Both are
+# available here because the single pair is the control that says whether the learner
+# still works, and the forty are the comparison that is allowed in a paper.
+def build(batch: int = 1024, device: str = "cuda", pairs: int = 40, **over) -> TrainEnv:
     sc = Scenario.preset("Paper grid (25 m)", cell_size_m=1.0, episode_seconds=50.0,
                          wind_mps=0.0, seed=0)
     sc.human_start = [[0.5, 0.5]]        # a corner, as in the paper's O-D pairs
     sc.human_goal = [[22.5, 24.5]]
     sc.drone_start = [12.5, 11.5]        # the paper's fixed rescuer base
     sc.fire_at = [5.0, 18.0]             # one of its four origins
+    sc.randomise = pairs > 1
+    sc.n_routes, sc.n_fire_origins = pairs, 4
     for k, v in over.items():
         setattr(sc, k, v)
 
@@ -125,7 +133,10 @@ def report(env, tag, net=None, deterministic=True):
 if __name__ == "__main__":
     from hadrsim.policy.ppo import PPO, ActorCritic, PPOConfig
 
-    env = build()
+    pairs = int(sys.argv[2]) if len(sys.argv) > 2 else 40
+    env = build(pairs=pairs)
+    print(f"origin/destination pairs: {len(env.scenario.routes or [1])}, "
+          f"fire origins: {len(env.scenario.fire_origins or [1])}")
     print(f"map {env.terrain.shape}, {env.clock.max_steps} decisions, "
           f"capture radius {env.capture_radius} m")
     print(f"HLR sees {HLR_CAM.fov_deg:.0f} deg down, LLR {LLR_CAM.fov_deg:.0f} deg ahead\n")
@@ -135,14 +146,16 @@ if __name__ == "__main__":
     report(env, "do nothing")
     report(env, "untrained", ActorCritic().to(env.device))
 
-    ppo = PPO(env, PPOConfig(horizon=25, epochs=3, entropy=0.005), device=str(env.device))
+    ppo = PPO(env, PPOConfig(horizon=25, epochs=3, entropy=0.005),
+              encoder="conv", device=str(env.device))
     print("\ntraining")
     ppo.train(int(sys.argv[1]) if len(sys.argv) > 1 else 200, log_every=20)
     # Saved before anything is reported.  Last time a formatting bug in `report`
     # threw after training finished and took two and a half million steps of work
     # with it, because the save came afterwards.
-    ppo.save("checkpoints/paper_parity.pt")
-    print("\nsaved checkpoints/paper_parity.pt\n")
+    out = f"checkpoints/paper_parity_{pairs}pair.pt"
+    ppo.save(out)
+    print(f"\nsaved {out}\n")
 
     ppo.net.eval()
     report(env, "trained, deterministic", ppo.net)

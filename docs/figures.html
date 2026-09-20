@@ -1,0 +1,265 @@
+<title>hadr-sim3d Results Figures</title>
+<style>
+  :root {
+    color-scheme: light;
+    --page:#f9f9f7; --surface:#fcfcfb; --ink:#0b0b0b; --ink-2:#52514e; --muted:#898781;
+    --grid:#e1e0d9; --axis:#c3c2b7; --ring:rgba(11,11,11,0.10);
+    --s1:#2a78d6; --s1-light:#86b6ef; --s2:#eb6834; --s3:#1baf7a; --ref:#c3c2b7; --ref-ink:#898781;
+    --tip-bg:#0b0b0b; --tip-ink:#ffffff;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      color-scheme: dark;
+      --page:#0d0d0d; --surface:#1a1a19; --ink:#ffffff; --ink-2:#c3c2b7; --muted:#898781;
+      --grid:#2c2c2a; --axis:#383835; --ring:rgba(255,255,255,0.10);
+      --s1:#3987e5; --s1-light:#184f95; --s2:#d95926; --s3:#199e70; --ref:#383835; --ref-ink:#898781;
+      --tip-bg:#ffffff; --tip-ink:#0b0b0b;
+    }
+  }
+  :root[data-theme="dark"] {
+      color-scheme: dark;
+      --page:#0d0d0d; --surface:#1a1a19; --ink:#ffffff; --ink-2:#c3c2b7; --muted:#898781;
+      --grid:#2c2c2a; --axis:#383835; --ring:rgba(255,255,255,0.10);
+      --s1:#3987e5; --s1-light:#184f95; --s2:#d95926; --s3:#199e70; --ref:#383835; --ref-ink:#898781;
+      --tip-bg:#ffffff; --tip-ink:#0b0b0b;
+  }
+  * { box-sizing:border-box; }
+  body { margin:0; background:var(--page); color:var(--ink); font:15px/1.55 system-ui,-apple-system,"Segoe UI",sans-serif; }
+  .page { max-width:980px; margin:0 auto; padding:40px 24px 80px; }
+  header { margin-bottom:28px; }
+  .eyebrow { font-size:11.5px; letter-spacing:.12em; text-transform:uppercase; color:var(--muted); font-weight:600; margin-bottom:10px; }
+  h1 { font-size:30px; font-weight:650; letter-spacing:-.01em; margin:0 0 8px; line-height:1.15; text-wrap:balance; }
+  .lede { color:var(--ink-2); max-width:66ch; margin:0; }
+  .kpis { display:grid; grid-template-columns:repeat(auto-fit,minmax(170px,1fr)); gap:1px; background:var(--grid);
+          border:1px solid var(--grid); margin:28px 0 36px; }
+  .kpi { background:var(--surface); padding:16px 18px; }
+  .kpi .l { font-size:12.5px; color:var(--ink-2); }
+  .kpi .v { font-size:34px; font-weight:650; line-height:1.15; margin-top:2px; }
+  .kpi .v.hero { font-size:44px; white-space:nowrap; }
+  .kpi .v.hero small { font-size:20px; font-weight:500; color:var(--ink-2); margin-left:4px; }
+  .kpi .d { font-size:12.5px; color:var(--muted); margin-top:4px; }
+  figure { margin:0 0 40px; background:var(--surface); border:1px solid var(--grid); padding:18px 20px 12px; }
+  figure h2 { font-size:17px; font-weight:650; margin:0 0 3px; }
+  figure .sub { color:var(--ink-2); font-size:13.5px; margin:0 0 14px; max-width:70ch; }
+  figure svg { display:block; width:100%; height:auto; overflow:visible; }
+  figcaption { color:var(--ink-2); font-size:13.5px; margin-top:10px; max-width:72ch; }
+  figcaption b { color:var(--ink); font-weight:600; }
+  .legend { display:flex; flex-wrap:wrap; gap:6px 18px; font-size:12.5px; color:var(--ink-2); margin:0 0 8px; }
+  .legend i { display:inline-block; width:14px; height:3px; vertical-align:middle; margin-right:6px; border-radius:2px; }
+  .legend i.dot { width:9px; height:9px; border-radius:50%; }
+  details { margin-top:8px; font-size:13px; }
+  summary { cursor:pointer; color:var(--ink-2); }
+  table { border-collapse:collapse; margin-top:8px; font-size:13px; }
+  th,td { text-align:left; padding:5px 14px 5px 0; border-bottom:1px solid var(--grid); }
+  td.n,th.n { text-align:right; font-variant-numeric:tabular-nums; }
+  .tip { position:fixed; pointer-events:none; background:var(--tip-bg); color:var(--tip-ink); padding:7px 10px;
+         border-radius:5px; font-size:12.5px; line-height:1.45; max-width:260px; display:none; z-index:10; }
+  .tip b { font-size:14px; }
+  .tip .k { display:inline-block; width:12px; height:3px; border-radius:2px; margin-right:6px; vertical-align:middle; }
+  text { font-family:system-ui,-apple-system,"Segoe UI",sans-serif; }
+  .ax text { fill:var(--muted); font-size:11.5px; font-variant-numeric:tabular-nums; }
+  .ax line { stroke:var(--grid); stroke-width:1; }
+  .ax .base { stroke:var(--axis); }
+  .lbl { fill:var(--ink); font-size:12.5px; }
+  .lbl2 { fill:var(--ink-2); font-size:12px; }
+  .note { fill:var(--muted); font-size:11.5px; }
+  rect.bar { rx:0; }
+  .hit { fill:transparent; }
+  @media (prefers-reduced-motion:reduce){*{transition:none!important}}
+</style>
+
+<div class="page">
+<header>
+  <div class="eyebrow">hadr-sim3d · results to date · 15 Sep 2026</div>
+  <h1>What the 3D simulator has shown so far</h1>
+  <p class="lede">Four figures. The first two are about the reward; the last two are about the policy it produced. Every number is deterministic capture rate on full episodes — the fraction of runs in which the low rescuer reaches the evacuee — unless a caption says otherwise.</p>
+</header>
+
+<div class="kpis">
+  <div class="kpi"><div class="l">Held-out gain, mean of 9 unseen cities</div><div class="v hero">+33.6<small>pts</small></div><div class="d">worst city +29.3 · 256 episodes each</div></div>
+  <div class="kpi"><div class="l">Paper-scale control, before → after reward fixes</div><div class="v">6.2 → 37.1%</div><div class="d">same learner, same map; only the reward changed</div></div>
+  <div class="kpi"><div class="l">Best reward balance vs our old defaults</div><div class="v">3.1×</div><div class="d">45.3% vs 14.6%, full fidelity</div></div>
+  <div class="kpi"><div class="l">Evacuee detour around a fire on its route</div><div class="v">99 m</div><div class="d">straight line 36 m · 0 steps in fire</div></div>
+</div>
+
+<!-- ================================================================ Fig 1 -->
+<figure>
+  <h2>1 · The learner was fine. The reward was paying for the wrong thing.</h2>
+  <p class="sub">Paper-scale control (25 m grid, 40 origin/destination pairs, 4 fire origins). Same PPO+LSTM, same map. Six reward and environment bugs fixed between the two blue-adjacent bars.</p>
+  <svg id="f1" viewBox="0 0 900 250" role="img" aria-label="Bar chart: capture rate before and after reward fixes on the paper-scale control"></svg>
+  <figcaption><b>Read:</b> before the fixes the trained policy (6.2%) was no better than doing nothing (6.1%). After them, 37.1%. The published 66% is on the paper's own 2D simulator, a different world, and is drawn grey for reference only.</figcaption>
+  <details><summary>Table view</summary><table id="t1"></table></details>
+</figure>
+
+<!-- ================================================================ Fig 2 -->
+<figure>
+  <h2>2 · One reward idea moved the city result more than everything else combined</h2>
+  <p class="sub">Seven reward balances, each trained 150 iterations on Downtown Berkeley at full fidelity (real quadrotor dynamics, a detector that can miss). Do-nothing floor 9.4%.</p>
+  <svg id="f2" viewBox="0 0 900 300" role="img" aria-label="Bar chart: capture rate by reward balance"></svg>
+  <figcaption><b>Read:</b> paying for how large the person is in the low rescuer's camera — closeness, only while in view — reached 45.3%. Every other balance sat between 3.6% and 21.7%. The paper's LLR detection window is 2.5 m, so in the paper <i>detection was closeness</i>; ours sees 45 m, so closeness has to be paid for separately. Removing proximity entirely halves the gain: it is what pulls the drone toward the last known position once the person is lost.</figcaption>
+  <details><summary>Table view</summary><table id="t2"></table></details>
+</figure>
+
+<!-- ================================================================ Fig 3 -->
+<figure>
+  <h2>3 · Trained on one city, it works on nine it never saw</h2>
+  <p class="sub">The closeness policy, trained on Downtown Berkeley only, scored on every city at full fidelity, 256 episodes each. Each city against its own do-nothing floor. Sorted by gain.</p>
+  <div class="legend"><span><i class="dot" style="background:var(--s1-light)"></i>do nothing</span><span><i class="dot" style="background:var(--s1)"></i>closeness policy</span></div>
+  <svg id="f3" viewBox="0 0 900 400" role="img" aria-label="Dumbbell chart: do-nothing floor versus policy capture rate per city"></svg>
+  <figcaption><b>Read:</b> every held-out city lands between +29 and +39 points; the trained-on city is not the best. A policy that had memorised Berkeley's street pattern would collapse on Manhattan's 400 m towers or Venice's alleys. This is a question the 2D grid could never ask.</figcaption>
+  <details><summary>Table view</summary><table id="t3"></table></details>
+</figure>
+
+<!-- ================================================================ Fig 4 -->
+<figure>
+  <h2>4 · Longer training made it worse — keep the best checkpoint, not the last</h2>
+  <p class="sub">The closeness balance, two seeds, evaluated on 256 full episodes every 25 iterations. The sweep's own run of this configuration is the single point at 150.</p>
+  <div class="legend"><span><i style="background:var(--s1)"></i>seed 0</span><span><i style="background:var(--s2)"></i>seed 1</span><span><i class="dot" style="background:var(--s3)"></i>the sweep's run, iteration 150</span><span><i style="background:var(--axis)"></i>do-nothing floor</span></div>
+  <svg id="f4" viewBox="0 0 900 320" role="img" aria-label="Line chart: capture rate versus training iteration for two seeds"></svg>
+  <figcaption><b>Read:</b> both seeds peak early and slide toward the floor — seed 1 touches it at iteration 200. The later policy flies half as far and sits lower: it drifts toward loitering. The sweep's 45% was a fortunate trajectory; across four runs of this configuration the peak ranged 19–45%. The honest deliverable is the kept-best checkpoint and this curve, not one number.</figcaption>
+  <details><summary>Table view</summary><table id="t4"></table></details>
+</figure>
+
+<p style="color:var(--muted);font-size:12.5px">Sources: <code>OVERNIGHT_FINDINGS.md</code> §2, §7, §9, §10 · logs in <code>hadr-sim3d/logs/</code> · all runs seeded and reproducible.</p>
+</div>
+<div class="tip" id="tip"></div>
+
+<script>
+const $ = s => document.querySelector(s);
+const NS = "http://www.w3.org/2000/svg";
+const el = (n, a = {}, t) => { const e = document.createElementNS(NS, n); for (const k in a) e.setAttribute(k, a[k]); if (t != null) e.textContent = t; return e; };
+const tip = $("#tip");
+function showTip(ev, html) { tip.replaceChildren(...html); tip.style.display = "block"; moveTip(ev); }
+function moveTip(ev) { const w = tip.offsetWidth, h = tip.offsetHeight; tip.style.left = Math.min(ev.clientX + 14, innerWidth - w - 8) + "px"; tip.style.top = Math.max(8, ev.clientY - h - 12) + "px"; }
+function hideTip() { tip.style.display = "none"; }
+const row = (val, name, colour) => { const d = document.createElement("div"); if (colour) { const k = document.createElement("span"); k.className = "k"; k.style.background = colour; d.appendChild(k); } const b = document.createElement("b"); b.textContent = val; d.appendChild(b); d.appendChild(document.createTextNode(" " + name)); return d; };
+function table(id, head, rows) { const t = $(id); const tr = document.createElement("tr"); head.forEach((h, i) => { const th = document.createElement("th"); th.textContent = h; if (i) th.className = "n"; tr.appendChild(th); }); t.appendChild(tr); rows.forEach(r => { const tr = document.createElement("tr"); r.forEach((c, i) => { const td = document.createElement("td"); td.textContent = c; if (i) td.className = "n"; tr.appendChild(td); }); t.appendChild(tr); }); }
+const css = v => getComputedStyle(document.documentElement).getPropertyValue(v).trim();
+
+// Horizontal bars with an emphasised subset, a floor line, and axis. Shared by 1 and 2.
+function hbars(svg, data, { max, floor, labelW = 190, ref = [] }) {
+  const W = 900, top = 14, rowH = 34, bar = 20, x0 = labelW, x1 = W - 70;
+  const H = top + data.length * rowH + 30;
+  svg.setAttribute("viewBox", `0 0 ${W} ${H}`);
+  const sx = v => x0 + (v / max) * (x1 - x0);
+  const ax = el("g", { class: "ax" });
+  for (let v = 0; v <= max; v += 10) { ax.appendChild(el("line", { x1: sx(v), x2: sx(v), y1: top - 4, y2: top + data.length * rowH })); ax.appendChild(el("text", { x: sx(v), y: top + data.length * rowH + 18, "text-anchor": "middle" }, v + "%")); }
+  ax.appendChild(el("line", { class: "base", x1: sx(0), x2: sx(0), y1: top - 4, y2: top + data.length * rowH }));
+  svg.appendChild(ax);
+  data.forEach((d, i) => {
+    const y = top + i * rowH + (rowH - bar) / 2;
+    const colour = d.emph ? css("--s1") : css("--ref");
+    const w = Math.max(0, sx(d.v) - sx(0));
+    // rounded data-end, square at the baseline
+    const p = `M${sx(0)},${y} h${Math.max(0, w - 4)} a4,4 0 0 1 4,4 v${bar - 8} a4,4 0 0 1 -4,4 h-${Math.max(0, w - 4)} z`;
+    const path = el("path", { d: p, fill: colour });
+    svg.appendChild(el("text", { class: "lbl", x: x0 - 10, y: y + bar / 2 + 4, "text-anchor": "end", fill: d.emph ? css("--ink") : css("--ink-2") }, d.name));
+    svg.appendChild(path);
+    svg.appendChild(el("text", { class: "lbl", x: sx(d.v) + 8, y: y + bar / 2 + 4, fill: d.emph ? css("--ink") : css("--ink-2") }, d.v.toFixed(1) + "%"));
+    if (d.note) svg.appendChild(el("text", { class: "note", x: sx(d.v) + 60, y: y + bar / 2 + 4 }, d.note));
+    const hit = el("rect", { class: "hit", x: 0, y: top + i * rowH, width: W, height: rowH, tabindex: 0 });
+    const show = ev => { showTip(ev, [row(d.v.toFixed(1) + "%", d.name, colour), ...(d.tip ? [row("", d.tip)] : [])]); path.setAttribute("opacity", "0.8"); };
+    hit.addEventListener("pointermove", show); hit.addEventListener("focus", e => show({ clientX: 300, clientY: 300 }));
+    hit.addEventListener("pointerleave", () => { hideTip(); path.removeAttribute("opacity"); }); hit.addEventListener("blur", hideTip);
+    svg.appendChild(hit);
+  });
+  if (floor != null) {
+    svg.appendChild(el("line", { x1: sx(floor), x2: sx(floor), y1: top - 4, y2: top + data.length * rowH, stroke: css("--ink-2"), "stroke-width": 1 }));
+    svg.appendChild(el("text", { class: "note", x: sx(floor) + 5, y: top + 2 }, `do nothing ${floor}%`));
+  }
+}
+
+// ---- Fig 1
+const f1 = [
+  { name: "do nothing", v: 6.1 }, { name: "untrained, mean of 8 inits", v: 7.3 },
+  { name: "trained, before the fixes", v: 6.2, emph: true }, { name: "trained, after the fixes", v: 37.1, emph: true },
+  { name: "paper Env-IV — its own 2D sim, reference", v: 66.0 },
+];
+hbars($("#f1"), f1, { max: 70, labelW: 230 });
+table("#t1", ["configuration", "capture"], f1.map(d => [d.name, d.v.toFixed(1) + "%"]));
+
+// ---- Fig 2
+const f2 = [
+  { name: "closeness (apparent_size 20, proximity 5)", v: 45.3, emph: true },
+  { name: "closeness only (proximity 0)", v: 21.7 }, { name: "paper's weights only", v: 19.2 },
+  { name: "search first", v: 17.2 }, { name: "as shipped (our old defaults)", v: 14.6 },
+  { name: "quiet proximity", v: 14.3 }, { name: "outcome heavy", v: 3.6 },
+];
+hbars($("#f2"), f2, { max: 50, floor: 9.4, labelW: 290 });
+table("#t2", ["reward balance", "capture", "gain vs floor"], f2.map(d => [d.name, d.v.toFixed(1) + "%", (d.v - 9.4 > 0 ? "+" : "") + (d.v - 9.4).toFixed(1)]));
+
+// ---- Fig 3 dumbbell
+const cities = [
+  ["SF Financial District", 6.2, 45.3], ["Tokyo Shinjuku", 10.5, 49.6], ["Venice San Marco", 10.2, 47.7],
+  ["Paris Le Marais", 7.4, 44.5], ["Downtown Berkeley (trained)", 8.2, 44.9], ["UC Berkeley campus", 9.4, 40.6],
+  ["Barcelona Eixample", 12.9, 43.4], ["Manhattan Midtown", 4.7, 34.4], ["Chicago Loop", 7.8, 37.1], ["Oakland Downtown", 8.6, 37.9],
+].sort((a, b) => (b[2] - b[1]) - (a[2] - a[1]));
+(function () {
+  const svg = $("#f3"), W = 900, top = 12, rowH = 34, x0 = 230, x1 = W - 90, max = 60;
+  const H = top + cities.length * rowH + 30; svg.setAttribute("viewBox", `0 0 ${W} ${H}`);
+  const sx = v => x0 + (v / max) * (x1 - x0);
+  const ax = el("g", { class: "ax" });
+  for (let v = 0; v <= max; v += 10) { ax.appendChild(el("line", { x1: sx(v), x2: sx(v), y1: top, y2: top + cities.length * rowH })); ax.appendChild(el("text", { x: sx(v), y: top + cities.length * rowH + 18, "text-anchor": "middle" }, v + "%")); }
+  svg.appendChild(ax);
+  cities.forEach(([name, a, b], i) => {
+    const y = top + i * rowH + rowH / 2, trained = name.includes("trained");
+    svg.appendChild(el("text", { class: "lbl", x: x0 - 12, y: y + 4, "text-anchor": "end", fill: css(trained ? "--ink-2" : "--ink") }, name));
+    svg.appendChild(el("line", { x1: sx(a), x2: sx(b), y1: y, y2: y, stroke: css("--s1-light"), "stroke-width": 2, "stroke-linecap": "round" }));
+    svg.appendChild(el("circle", { cx: sx(a), cy: y, r: 5, fill: css("--s1-light"), stroke: css("--surface"), "stroke-width": 2 }));
+    svg.appendChild(el("circle", { cx: sx(b), cy: y, r: 5, fill: css("--s1"), stroke: css("--surface"), "stroke-width": 2 }));
+    svg.appendChild(el("text", { class: "lbl", x: sx(b) + 10, y: y + 4 }, `+${(b - a).toFixed(1)}`));
+    const hit = el("rect", { class: "hit", x: 0, y: top + i * rowH, width: W, height: rowH, tabindex: 0 });
+    const show = ev => showTip(ev, [row(b.toFixed(1) + "%", "closeness policy", css("--s1")), row(a.toFixed(1) + "%", "do nothing", css("--s1-light")), row("+" + (b - a).toFixed(1), name)]);
+    hit.addEventListener("pointermove", show); hit.addEventListener("focus", () => show({ clientX: 300, clientY: 300 }));
+    hit.addEventListener("pointerleave", hideTip); hit.addEventListener("blur", hideTip);
+    svg.appendChild(hit);
+  });
+  table("#t3", ["city", "do nothing", "policy", "gain"], cities.map(([n, a, b]) => [n, a.toFixed(1) + "%", b.toFixed(1) + "%", "+" + (b - a).toFixed(1)]));
+})();
+
+// ---- Fig 4 lines
+(function () {
+  const it = [25, 50, 75, 100, 125, 150, 175, 200, 225, 250, 275, 300];
+  const s0 = [30.9, 15.2, 19.5, 23.0, 19.9, 18.8, 15.6, 14.8, 14.1, 14.5, 14.1, 17.6];
+  const s1 = [16.8, 18.4, 16.0, 19.5, 18.0, 13.3, 17.6, 8.2, 12.1, 7.8, 12.9, 10.9];
+  const floor = 8.6, sweep = [150, 42.2];
+  const svg = $("#f4"), W = 900, H = 320, L = 60, R = 40, T = 16, B = 40, max = 50;
+  const sx = v => L + ((v - 0) / 300) * (W - L - R), sy = v => T + (1 - v / max) * (H - T - B);
+  const ax = el("g", { class: "ax" });
+  for (let v = 0; v <= max; v += 10) { ax.appendChild(el("line", { x1: L, x2: W - R, y1: sy(v), y2: sy(v) })); ax.appendChild(el("text", { x: L - 8, y: sy(v) + 4, "text-anchor": "end" }, v + "%")); }
+  it.forEach(x => ax.appendChild(el("text", { x: sx(x), y: H - B + 18, "text-anchor": "middle" }, x)));
+  ax.appendChild(el("text", { x: (L + W - R) / 2, y: H - 4, "text-anchor": "middle" }, "training iteration"));
+  ax.appendChild(el("line", { class: "base", x1: L, x2: W - R, y1: sy(0), y2: sy(0) }));
+  svg.appendChild(ax);
+  svg.appendChild(el("line", { x1: L, x2: W - R, y1: sy(floor), y2: sy(floor), stroke: css("--ink-2"), "stroke-width": 1 }));
+  svg.appendChild(el("text", { class: "note", x: L + 6, y: sy(floor) - 5 }, `do nothing ${floor}%`));
+  const series = [["seed 0", s0, css("--s1")], ["seed 1", s1, css("--s2")]];
+  series.forEach(([name, ys, c]) => {
+    svg.appendChild(el("path", { d: ys.map((y, i) => (i ? "L" : "M") + sx(it[i]) + "," + sy(y)).join(" "), fill: "none", stroke: c, "stroke-width": 2, "stroke-linejoin": "round", "stroke-linecap": "round" }));
+    ys.forEach((y, i) => svg.appendChild(el("circle", { cx: sx(it[i]), cy: sy(y), r: 4, fill: c, stroke: css("--surface"), "stroke-width": 2 })));
+    const last = ys[ys.length - 1];
+    svg.appendChild(el("text", { class: "lbl2", x: sx(300) + 8, y: sy(last) + 4 }, name));
+  });
+  // kept-best annotations
+  svg.appendChild(el("text", { class: "note", x: sx(25) + 8, y: sy(30.9) - 8 }, "kept best, seed 0: 30.9%"));
+  svg.appendChild(el("text", { class: "note", x: sx(100) + 8, y: sy(19.5) + 22 }, "kept best, seed 1: 19.5%"));
+  svg.appendChild(el("circle", { cx: sx(sweep[0]), cy: sy(sweep[1]), r: 5, fill: css("--s3"), stroke: css("--surface"), "stroke-width": 2 }));
+  svg.appendChild(el("text", { class: "lbl2", x: sx(sweep[0]) + 10, y: sy(sweep[1]) + 4 }, "the sweep's run: 42.2%"));
+  // crosshair + tooltip
+  const cross = el("line", { y1: T, y2: H - B, stroke: css("--axis"), "stroke-width": 1, style: "display:none" });
+  svg.appendChild(cross);
+  const hit = el("rect", { class: "hit", x: L, y: T, width: W - L - R, height: H - T - B });
+  hit.addEventListener("pointermove", ev => {
+    const pt = svg.createSVGPoint(); pt.x = ev.clientX; pt.y = ev.clientY; const p = pt.matrixTransform(svg.getScreenCTM().inverse());
+    let k = 0; it.forEach((x, i) => { if (Math.abs(sx(x) - p.x) < Math.abs(sx(it[k]) - p.x)) k = i; });
+    cross.setAttribute("x1", sx(it[k])); cross.setAttribute("x2", sx(it[k])); cross.style.display = "";
+    const rows = [row(s0[k].toFixed(1) + "%", "seed 0", css("--s1")), row(s1[k].toFixed(1) + "%", "seed 1", css("--s2"))];
+    if (it[k] === 150) rows.push(row("42.2%", "the sweep's run", css("--s3")));
+    rows.push(row("", "iteration " + it[k]));
+    showTip(ev, rows);
+  });
+  hit.addEventListener("pointerleave", () => { hideTip(); cross.style.display = "none"; });
+  svg.appendChild(hit);
+  table("#t4", ["iteration", "seed 0", "seed 1"], it.map((x, i) => [x, s0[i].toFixed(1) + "%", s1[i].toFixed(1) + "%"]));
+})();
+</script>

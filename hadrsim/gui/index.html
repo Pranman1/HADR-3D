@@ -29,7 +29,26 @@
                    font-weight: 600; }
   button:disabled { opacity: .4; cursor: default; }
   #stage { flex: 1; position: relative; overflow: hidden; background: #101014; }
-  canvas { position: absolute; inset: 0; margin: auto; image-rendering: pixelated; }
+  #flat { position: absolute; inset: 0; }
+  #flat canvas { position: absolute; inset: 0; margin: auto; image-rendering: pixelated; }
+  #solid { position: absolute; inset: 0; display: none; }
+  #solid canvas { display: block; width: 100%; height: 100%; }
+  body.three #flat { display: none; }
+  body.three #solid { display: block; }
+  #views { position: absolute; top: 10px; right: 12px; z-index: 5; display: flex; gap: 6px; }
+  #views button { padding: 5px 12px; font-size: 11px; background: #1e1e24dd; }
+  #views button.on { background: var(--cool); border-color: var(--cool); color: #101014;
+                     font-weight: 600; }
+  #sizer { position: absolute; right: 12px; bottom: 12px; z-index: 5; display: none;
+           background: #1e1e24cc; padding: 8px 12px; border-radius: 6px; font-size: 11px;
+           color: var(--dim); width: 190px; }
+  #sizer label { margin: 0 0 4px; } #sizer b { color: var(--ink); } #sizer span { float: right; }
+  body.three #sizer { display: block; }
+  #legend { position: absolute; left: 12px; bottom: 12px; z-index: 5; font-size: 11px;
+            color: var(--dim); background: #1e1e24cc; padding: 8px 10px; border-radius: 6px;
+            line-height: 1.7; pointer-events: none; }
+  #legend i { display: inline-block; width: 9px; height: 9px; border-radius: 2px;
+              margin-right: 6px; vertical-align: -1px; }
   #bar { display: flex; align-items: center; gap: 14px; padding: 10px 16px;
          border-top: 1px solid var(--line); background: var(--panel); font-size: 12px; }
   .stat b { color: var(--ink); font-variant-numeric: tabular-nums; }
@@ -42,7 +61,7 @@
 
 <aside>
   <h1>hadrsim</h1>
-  <div class="sub">scenario engine · step 1 (no drones yet)</div>
+  <div class="sub">scenario engine · live policy · 2D + 3D</div>
 
   <h2>Place</h2>
   <select id="preset"></select>
@@ -63,7 +82,9 @@
     <div><label>Drones</label><input type="number" id="drones" value="2" min="0" max="6"></div>
   </div>
   <label>Policy</label>
-  <select id="policy"><option value="none">none — nothing flies yet</option></select>
+  <select id="policy"><option value="none">none — drones stay grounded</option></select>
+  <div class="hint">A checkpoint flies both rescuers. The 3D view shows what each
+  camera covers.</div>
 
   <h2>Placement</h2>
   <div class="row">
@@ -81,9 +102,25 @@
 
 <main>
   <div id="stage">
-    <canvas id="map"></canvas>
-    <canvas id="fire"></canvas>
-    <canvas id="agents"></canvas>
+    <div id="views">
+      <button id="v2d" class="on">2D</button><button id="v3d">3D</button>
+    </div>
+    <div id="flat">
+      <canvas id="map"></canvas>
+      <canvas id="fire"></canvas>
+      <canvas id="agents"></canvas>
+    </div>
+    <div id="solid"></div>
+    <div id="sizer">
+      <label>airframe drawn at <b id="dsizev">×8</b> <span>true size 0.5 m</span></label>
+      <input type="range" id="dsize" min="1" max="20" step="1" value="8">
+    </div>
+    <div id="legend">
+      <i style="background:#5aa9e6"></i>high rescuer — wide view, cannot intercept<br>
+      <i style="background:#8fd0ff"></i>low rescuer — the only one that can<br>
+      <i style="background:#7ce8b0"></i>cone = that camera's real field of view; green when it has them<br>
+      <i style="background:#e45c3a"></i>the evacuee, reddening as they panic
+    </div>
   </div>
   <div id="bar">
     <button id="play" disabled>▶ Play</button>
@@ -95,20 +132,70 @@
     <span class="stat"><span>burning</span> <b id="burning">0</b></span>
     <span class="stat"><span>burnt</span> <b id="burnt">0</b></span>
     <span class="stat"><span>safe</span> <b id="safe">0</b></span>
+    <span class="stat"><span>rescue</span> <b id="rescue">—</b></span>
     <span class="stat" id="status" style="margin-left:auto;color:var(--dim)">idle</span>
   </div>
 </main>
 
-<script>
+<script src="/three.min.js"></script>
+<script type="module">
+import { Scene3D } from "/scene3d.js";
+
 const $ = id => document.getElementById(id);
 const cvMap = $("map"), cvFire = $("fire"), cvAgents = $("agents");
 let world = null, placing = null, ws = null, playing = false;
 let cfg = {};
 
-fetch("/presets").then(r => r.json()).then(d => {
-  d.presets.forEach(p => $("preset").add(new Option(p, p)));
-  cfg = d.defaults;
+function loadPresets() {
+ const keep = $("preset").value;
+ fetch("/presets?radius_m=" + (+$("radius").value || 100)).then(r => r.json()).then(d => {
+  $("preset").innerHTML = "";
+  (d.cities || d.presets.map(n => ({ name: n, ready: true }))).forEach(c => {
+    // An uncached city needs a network fetch that can hang; say so rather than
+    // letting someone pick it mid-demo.
+    const o = new Option(c.ready ? c.name : `${c.name} — needs download`, c.name);
+    o.disabled = !c.ready;
+    $("preset").add(o);
+  });
+  if (keep) $("preset").value = keep;
+  cfg = { ...d.defaults, ...cfg };
+ });
+}
+loadPresets();
+// The cache is per city *and* radius, so which cities are ready changes with it.
+$("radius").onchange = loadPresets;
+
+// Whatever has actually been trained, newest first.
+fetch("/policies").then(r => r.json()).then(d => {
+  d.policies.forEach(p => $("policy").add(new Option(p.name, p.path)));
 });
+
+// ---------------------------------------------------------------- 3D
+let three = null, last = null;
+function solid() {
+  if (!three) {
+    three = new Scene3D($("solid"));
+    window.hadr3d = three;                 // reachable from the console, for poking at it
+    three.droneScale = +$("dsize").value;
+    if (world) { three.setScenario(world); if (last) three.setFrame(last.state, last.fire, last.flames, last.wind); }
+  }
+  return three;
+}
+$("v3d").onclick = () => {
+  document.body.classList.add("three");
+  $("v3d").classList.add("on"); $("v2d").classList.remove("on");
+  solid().resize();
+};
+$("v2d").onclick = () => {
+  document.body.classList.remove("three");
+  $("v2d").classList.add("on"); $("v3d").classList.remove("on");
+  fit();
+};
+addEventListener("resize", () => three && three.resize());
+$("dsize").oninput = e => {
+  $("dsizev").textContent = "×" + e.target.value;
+  if (three) { three.droneScale = +e.target.value; three.redraw(); }
+};
 
 // ---------------------------------------------------------------- layout
 function fit() {
@@ -147,8 +234,16 @@ function drawAgents(state) {
   });
 
   (state.drones || []).forEach(d => {
-    g.fillStyle = d.role === "hlr" ? "#5aa9e6" : "#8fd0ff";
+    const colour = d.role === "hlr" ? "#5aa9e6" : "#8fd0ff";
+    // The ground each camera covers, so you can see what it is missing.
+    g.strokeStyle = d.sees ? "#7ce8b0" : colour;
+    g.globalAlpha = d.sees ? 0.9 : 0.35; g.lineWidth = Math.max(1, s * 0.6);
+    g.beginPath(); g.arc(d.x * s, d.y * s, Math.max(2, d.footprint * s), 0, 7); g.stroke();
+    g.globalAlpha = 1;
+    g.fillStyle = colour;
     g.beginPath(); g.arc(d.x * s, d.y * s, Math.max(3, 2 * s), 0, 7); g.fill();
+    g.fillStyle = "#cfd3dd"; g.font = `${Math.max(9, s * 2)}px ui-monospace, monospace`;
+    g.fillText(`${d.z | 0}m`, d.x * s + 4 * s, d.y * s - 3 * s);
   });
 }
 
@@ -161,21 +256,55 @@ function blit(canvas, dataUri, w, h) {
   img.src = dataUri;
 }
 
+// ---------------------------------------------------------------- smoothing
+const tween = { from: null, to: null, t0: 0, ms: 0, arrived: 0 };
+function lerpState(a, b, k) {
+  if (!a || !b) return b;
+  const mix = (x, y) => x + (y - x) * k;
+  const agent = (p, q) => ({ ...q, x: mix(p.x, q.x), y: mix(p.y, q.y), z: q.z != null ? mix(p.z ?? q.z, q.z) : undefined });
+  return { ...b,
+    humans: b.humans.map((h, i) => a.humans[i] ? agent(a.humans[i], h) : h),
+    drones: b.drones.map((d, i) => a.drones[i] ? agent(a.drones[i], d) : d) };
+}
+(function smooth() {
+  requestAnimationFrame(smooth);
+  if (!tween.to || !world) return;
+  const k = tween.ms ? Math.min(1, (performance.now() - tween.t0) / tween.ms) : 1;
+  if (k >= 1 && tween.done) return;
+  tween.done = k >= 1;
+  const st = lerpState(tween.from, tween.to, k);
+  drawAgents(st);
+  if (three) three.moveAgents(st);
+})();
+
 // ---------------------------------------------------------------- socket
 function connect() {
   ws = new WebSocket(`ws://${location.host}/live`);
   ws.onmessage = ev => {
     const m = JSON.parse(ev.data);
     if (m.type === "scenario") {
-      world = m; cfg = m.config;
+      world = m; cfg = m.config; last = null;
       blit(cvMap, m.map, m.width, m.height);
       fit();
+      if (three) three.setScenario(m);
+      $("rescue").textContent = m.flying ? "flying" : "—";
       $("status").textContent = "ready";
       ["play", "step", "reset"].forEach(b => $(b).disabled = false);
     } else if (m.type === "frame") {
       const st = m.state;
+      // Frames arrive every simulated decision (0.5 s).  Rather than jump the agents
+      // there, tween from the previous frame over the interval, so motion reads at
+      // the display's rate while the simulation keeps its own.
+      tween.from = last ? last.state : st; tween.to = st;
+      tween.t0 = performance.now(); tween.ms = last ? Math.max(60, performance.now() - tween.arrived) : 0;
+      tween.arrived = performance.now(); tween.done = false;
+      last = m;
       blit(cvFire, m.fire, world.width, world.height);
+      if (three) three.setFrame(st, m.fire, m.flames, m.wind);
       drawAgents(st);
+      const h = (st.humans || [])[0] || {};
+      $("rescue").textContent = h.harmed ? "lost" : h.reached ? "safe"
+                              : h.captured ? "being led" : world.flying ? "searching" : "—";
       $("t").textContent = st.t.toFixed(1);
       $("burning").textContent = st.burning;
       $("burnt").textContent = st.burnt;

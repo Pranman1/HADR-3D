@@ -24,6 +24,8 @@ import torch
 
 from hadrsim.agents.crowd import Crowd
 from hadrsim.agents.human import Human
+from hadrsim.core import rotation as rot
+from hadrsim.core import spec
 from hadrsim.core.rng import Rng
 from hadrsim.scenario import Scenario, autoplace
 from hadrsim.world import fire as fire_mod
@@ -148,3 +150,155 @@ class Runner:
 def _tile(values: list, n: int) -> list:
     """Repeat a short list of positions up to `n`, so one entry can serve many."""
     return [values[i % len(values)] for i in range(n)]
+
+
+class PolicyRunner:
+    """A live scenario with drones flying a trained policy.
+
+    Deliberately a *wrapper around the training environment* rather than a second
+    implementation.  `Runner` above steps fire, smoke, wind and people itself, which
+    is fine while nothing flies; the moment a policy is involved, any difference
+    between the world it trained in and the world it is being watched in makes the
+    watching worthless -- and the differences that matter are small ones, like
+    whether capture is checked every substep or once a decision.  So this steps
+    `TrainEnv` at batch 1 and reads its state out.  There is exactly one physics.
+
+    One person, because that is what the policy's observation contract describes.
+    The crowd view is `Runner`, and has no drones.
+    """
+
+    def __init__(self, scenario, checkpoint: str | None = None, device: str = "cpu"):
+        from hadrsim.envs.train import TrainEnv
+        from hadrsim.policy.ppo import ActorCritic
+
+        # Full fidelity: the quadrotor tier and the detector that can miss -- the world
+        # the policies since 14 Sep were trained in.  Showing them anything easier would
+        # be showing a policy flying a world it never learned.
+        self.env = TrainEnv(scenario, batch=1, fidelity="quadrotor", detector="geometric",
+                            device=device)
+        self.scenario = self.env.scenario
+        self.terrain = self.env.terrain
+        self.clock = self.env.clock
+        self.net = None
+        if checkpoint and checkpoint not in ("none", ""):
+            blob = torch.load(checkpoint, map_location=device)
+            # Which encoder trained is recoverable from the weights: only the
+            # convolutional one has a `conv` submodule, and loading the wrong one
+            # fails with a shape error rather than flying badly, which is worse.
+            kind = "conv" if any("conv" in k for k in blob["net"]) else "flat"
+            self.net = ActorCritic(kind, blob.get("config", {}).get("hidden", 128))
+            self.net.load_state_dict(blob["net"])
+            self.net.to(device).eval()
+        self.reset()
+
+    # ------------------------------------------------------------------ state
+
+    @property
+    def fire(self):
+        return self.env.fire
+
+    @property
+    def smoke(self):
+        return self.env.smoke
+
+    @property
+    def wind(self):
+        return self.env.wind
+
+    @property
+    def time(self) -> float:
+        return float(self.env.step_count[0]) * self.clock.control_dt
+
+    @property
+    def done(self) -> bool:
+        return bool(self.env.step_count[0] >= self.clock.max_steps
+                    or self.env.human.reached[0] or self.env.human.harmed[0])
+
+    def reset(self) -> None:
+        self.obs = self.env.reset()
+        self.state = None
+        self.trail: list[list[float]] = [[], []]
+
+    # ------------------------------------------------------------------- step
+
+    def step(self) -> None:
+        """One policy decision, and the half-second of flight that follows it."""
+        if self.done:
+            return
+        with torch.no_grad():
+            if self.net is None:
+                action = torch.zeros(1, 2, spec.ACTION_DIM, device=self.env.device)
+            else:
+                action, _, _, self.state = self.net.act(
+                    self.obs, self.state, deterministic=True)
+            self.obs, _, _, self.info = self.env.step(action)
+        cell = self.terrain.cell_size_m
+        for i, d in enumerate(self.env.drones):
+            self.trail[i].append([round(float(d.pos[0, 0] / cell), 2),
+                                  round(float(d.pos[0, 1] / cell), 2)])
+            del self.trail[i][:-120]
+
+    def advance(self, seconds: float) -> None:
+        for _ in range(max(1, round(seconds / self.clock.control_dt))):
+            if self.done:
+                break
+            self.step()
+
+    # --------------------------------------------------------------- watching
+
+    def snapshot(self) -> Snapshot:
+        from hadrsim.sensing import fov as fov_mod
+
+        e, cell = self.env, self.terrain.cell_size_m
+        seen = self.obs["seen_by"][0].tolist()
+        drones = []
+        for i, d in enumerate(e.drones):
+            cam = e.cameras[i]
+            reach = float(fov_mod.ground_footprint(cam, d.pos, d.quat)[0])
+            roll, pitch = d.attitude
+            # The direction the camera actually looks, in the world, through the
+            # airframe's attitude -- so the 3D view draws the exact cone the detector
+            # tests against.  A forward camera on a leaning drone is not looking
+            # straight down, and a view that drew it that way would be showing a
+            # sensor that does not exist.
+            axis = fov_mod.look_direction(cam, d.quat)[0].tolist()
+            # The airframe's own forward and up, likewise in the world, so the model
+            # is drawn at the attitude the physics has it at rather than level.
+            ex = torch.tensor([[1.0, 0.0, 0.0]], device=d.quat.device)
+            ez = torch.tensor([[0.0, 0.0, 1.0]], device=d.quat.device)
+            fwd = rot.rotate(d.quat[:1], ex)[0].tolist()
+            up = rot.rotate(d.quat[:1], ez)[0].tolist()
+            drones.append({
+                "cam": {"axis": [round(v, 4) for v in axis], "fov": cam.fov_deg,
+                        "range": cam.range_m, "kind": cam.kind},
+                "fwd": [round(v, 4) for v in fwd],
+                "up": [round(v, 4) for v in up],
+                "arm_m": d.af.arm_m,
+                "x": round(float(d.pos[0, 0] / cell), 2),
+                "y": round(float(d.pos[0, 1] / cell), 2),
+                "z": round(float(d.pos[0, 2]), 1),
+                "yaw": round(float(d.yaw[0]), 3),
+                "roll": round(float(roll[0]), 3),
+                "pitch": round(float(pitch[0]), 3),
+                "role": "hlr" if i == 0 else "llr",
+                "footprint": round(reach / cell, 2),
+                "sees": bool(seen[i]),
+                "trail": self.trail[i],
+            })
+        return Snapshot(
+            t=round(self.time, 2),
+            burning=int(e.fire.burning[0].sum()),
+            burnt=int(e.fire.burnt[0].sum()),
+            humans=[{
+                "x": round(float(e.human.pos[0, 0] / cell), 2),
+                "y": round(float(e.human.pos[0, 1] / cell), 2),
+                "panic": round(float(e.human.gamma[0]), 3),
+                "speed": round(float(e.human.vel[0].norm()), 2),
+                "reached": bool(e.human.reached[0]),
+                "harmed": bool(e.human.harmed[0]),
+                "captured": bool(e.captured[0]),
+            }],
+            drones=drones,
+            reached=int(e.human.reached[0]),
+            done=self.done,
+        )

@@ -56,6 +56,8 @@ class View:
     newly_seen: torch.Tensor | None = None  # (B,) spotted for the first time this step
     time_left: torch.Tensor | None = None   # (B,) 1 at the start, 0 at the deadline
     belief_age: torch.Tensor | None = None  # (B,) seconds since the last sighting
+    newly_reached: torch.Tensor | None = None  # (B,) arrived at safety this step
+    newly_harmed: torch.Tensor | None = None   # (B,) caught by the fire this step
 
     def _or_zero(self, field) -> torch.Tensor:
         v = getattr(self, field)
@@ -83,8 +85,15 @@ def reached_safety(v: View) -> torch.Tensor:
     unaided -- and early on that is the common case, so it is a large reward signal
     entirely uncorrelated with anything the policy did.  Seen directly in a training
     run: reward climbing past +60 while the capture rate sat at zero.
+
+    Paid **once**, on the step they arrive, and larger the sooner.  Reading the
+    latched `reached_goal` instead paid 100 a step for every step remaining after
+    they got there -- about 8,600 for a single rescue, against 200 for the capture
+    that caused it.  The same event, smeared over the rest of the episode, drowning
+    out everything the policy actually controls.
     """
-    return v.reached_goal.float() * v.was_captured.float()
+    sooner = 0.5 + 0.5 * v._or_zero("time_left")
+    return v._or_zero("newly_reached") * v.was_captured.float() * sooner
 
 
 def evacuee_in_hlr_fov(v: View) -> torch.Tensor:
@@ -125,9 +134,16 @@ def proximity(v: View) -> torch.Tensor:
 
 
 def goal_progress(v: View) -> torch.Tensor:
-    """Paper's l3: the person getting closer to safety, once they are being led."""
+    """Paper's l3: the person getting closer to safety, once they are being led.
+
+    Gated on `was_captured` -- ever led -- not `captured`, which is the single step
+    the capture happens on.  Gated on the edge, the one term that pays for the second
+    half of a rescue fired once per episode and contributed 0.19 points out of 760:
+    the policy was never paid anything for where it took somebody after reaching
+    them, only for reaching them.
+    """
     distance = (v.person_pos - v.goal).norm(dim=-1)
-    return torch.exp(-distance / 40.0) * v.captured.float()
+    return torch.exp(-distance / 40.0) * v.was_captured.float()
 
 
 def role_coordination(v: View) -> torch.Tensor:
@@ -215,9 +231,36 @@ def coverage(v: View) -> torch.Tensor:
     return v._or_zero("new_area")
 
 
+PERSON_HEIGHT_M = 1.7
+
+
+def apparent_size(v: View) -> torch.Tensor:
+    """How large the person is in the low rescuer's camera: closeness, but only
+    while they are actually in view.
+
+    The paper's LLR "detects" the evacuee inside a 5x5 window -- two and a half
+    metres.  In the paper, then, detection *was* closeness.  Ours sees 45 m ahead, so
+    a policy could be paid for detection from across the street and never approach,
+    which is exactly what it did: 97% seen, 18% captured.
+
+    Pinhole camera: a 1.7 m person subtends height/distance.  Saturates at one when
+    they fill the frame, is zero when nobody has them.  A real detector reports a
+    bounding box, so on hardware this is the box height and nothing has to change.
+    """
+    if v.n_drones < 2:
+        return torch.zeros(v.batch, device=v.drone_pos.device)
+    dist = (v.drone_pos[:, 1] - v.person_pos).norm(dim=-1)
+    size = (PERSON_HEIGHT_M / dist.clamp_min(PERSON_HEIGHT_M)).clamp(0.0, 1.0)
+    return size * v.seen_by[:, 1].float() * v.confidence
+
+
 def evacuee_harmed(v: View) -> torch.Tensor:
-    """The failure the rescue exists to prevent. Weighted negative."""
-    return v._or_zero("harmed")
+    """The failure the rescue exists to prevent. Weighted negative, paid once.
+
+    Latched, this was -100 a step for the rest of the episode -- a constant of about
+    -1,340 identical whatever the drones did, contributing nothing but variance.
+    """
+    return v._or_zero("newly_harmed")
 
 
 ALL = {
@@ -235,4 +278,5 @@ ALL = {
     "first_sight": first_sight,
     "coverage": coverage,
     "evacuee_harmed": evacuee_harmed,
+    "apparent_size": apparent_size,
 }

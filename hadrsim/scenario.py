@@ -18,6 +18,7 @@ waits for.
 
 from __future__ import annotations
 
+import math
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 
@@ -29,12 +30,29 @@ from hadrsim.world import terrain as terrain_mod
 
 # Places worth offering in a menu: a low-rise campus, a mid-rise downtown, and two
 # skylines. Enough variety that a policy trained on one is visibly tested by another.
+# Chosen for *morphology*, not for being famous.  A policy that only ever sees one
+# street pattern has learned that pattern, and the way to find out is to fly it
+# somewhere shaped differently: a regular grid with long sightlines, a medieval core
+# where nothing is straight and every corner is blind, a campus of free-standing
+# blocks with open ground between them, a strip hemmed in by water.  These are the
+# held-out maps in `sandbox/generalise.py`.
+# Pinned to coordinates rather than to a name, because a geocoder is not a fixed
+# thing: "Eixample, Barcelona" resolved to 41.488, 2.293 -- eight kilometres outside
+# the district, in open ground near Montgat -- and produced a map 2.7% built where
+# the real Eixample is one of the densest grids in Europe.  A map that silently
+# changes when a gazetteer is edited is not a map a result can rest on.
 PRESETS = {
-    "Downtown Berkeley": ("Downtown Berkeley, California", 150.0),
-    "UC Berkeley campus": ("UC Berkeley campus, California", 180.0),
-    "SF Financial District": ("Financial District, San Francisco", 180.0),
-    "Manhattan Midtown": ("Midtown Manhattan, New York", 180.0),
-    "Paper grid (25 m)": (None, 0.0),
+    "Downtown Berkeley":     ("Downtown Berkeley, California",   37.87010, -122.26814, 150.0),
+    "UC Berkeley campus":    ("UC Berkeley campus",              37.86843, -122.26052, 180.0),
+    "SF Financial District": ("Financial District, SF",          37.79365, -122.39894, 180.0),
+    "Manhattan Midtown":     ("Midtown Manhattan, New York",     40.75269,  -73.97725, 180.0),
+    "Chicago Loop":          ("The Loop, Chicago",               41.88161,  -87.62946, 180.0),
+    "Barcelona Eixample":    ("Eixample, Barcelona",             41.39250,    2.16490, 180.0),
+    "Paris Le Marais":       ("Le Marais, Paris",                48.86038,    2.36074, 160.0),
+    "Venice San Marco":      ("San Marco, Venice",               45.43483,   12.33402, 160.0),
+    "Tokyo Shinjuku":        ("Shinjuku, Tokyo",                 35.69376,  139.70363, 180.0),
+    "Oakland Downtown":      ("Downtown Oakland, California",    37.80432, -122.27119, 160.0),
+    "Paper grid (25 m)":     (None, 0.0, 0.0, 0.0),
 }
 
 _TERRAIN_CACHE: dict[tuple, object] = {}
@@ -48,6 +66,8 @@ class Scenario:
     radius_m: float = 150.0
     cell_size_m: float = 1.0
     paper_map: str | None = None          # set instead of `place` for the 25 m grid
+    lat: float | None = None              # pinned centre; `place` is then only a label
+    lon: float | None = None
 
     wind_mps: float = 5.0
     wind_bearing_deg: float = 40.0
@@ -63,6 +83,18 @@ class Scenario:
     fire_radius_m: float = 2.5
     drone_start: list | None = None       # [x, y] launch point, shared by the team
 
+    # Variety across a training batch, as the paper has it: 40 origin/destination
+    # pairs and 4 fire origins, drawn per environment.  Without this every
+    # environment in a batch is the same episode, the policy has one trajectory to
+    # memorise rather than a task to learn, and -- worse -- an untrained network with
+    # a constant action scores either 0% or 100% depending on which way it happens to
+    # point, which makes every baseline meaningless.
+    n_routes: int = 40
+    n_fire_origins: int = 4
+    routes: list | None = None            # [[[sx, sy], [gx, gy]], ...]
+    fire_origins: list | None = None      # [[x, y], ...]
+    randomise: bool = True
+
     episode_seconds: float = 120.0
     policy: str = "none"                  # checkpoint name, once there is one
 
@@ -71,15 +103,18 @@ class Scenario:
 
     def terrain(self):
         """The map, cached. Rebuilding a city per parameter change is unusable."""
-        key = (self.paper_map, self.place, self.radius_m, self.cell_size_m)
+        key = (self.paper_map, self.place, self.lat, self.lon,
+               self.radius_m, self.cell_size_m)
         if key not in _TERRAIN_CACHE:
             if self.paper_map:
                 _TERRAIN_CACHE[key] = terrain_mod.load(
                     self.paper_map, cell_size_m=self.cell_size_m)
             else:
+                bbox = (osm.bbox_around(self.lat, self.lon, self.radius_m)
+                        if self.lat is not None else None)
                 _TERRAIN_CACHE[key] = osm.load(
-                    place=self.place, radius_m=self.radius_m,
-                    cell_size_m=self.cell_size_m)
+                    place=None if bbox else self.place, bbox=bbox,
+                    radius_m=self.radius_m, cell_size_m=self.cell_size_m)
         return _TERRAIN_CACHE[key]
 
     def to_dict(self) -> dict:
@@ -103,8 +138,8 @@ class Scenario:
         smaller extract than a demo does, and having to remember which presets
         already set which fields is exactly the friction presets exist to remove.
         """
-        place, radius = PRESETS[name]
-        fields = {"place": place, "radius_m": radius}
+        place, lat, lon, radius = PRESETS[name]
+        fields = {"place": place, "lat": lat, "lon": lon, "radius_m": radius}
         if place is None:
             fields = {"place": None, "paper_map": "maps/rust25.yaml", "radius_m": 0.0}
         return cls(**{**fields, **overrides})
@@ -203,4 +238,84 @@ def autoplace(sc: Scenario) -> Scenario:
         chosen = good.nonzero()[(from_start[good] - route / 2).abs().argmin()]
         sc.fire_at = (chosen.float() * cell).tolist()
 
+    if sc.randomise and sc.routes is None:
+        sc.routes, sc.fire_origins = _variety(sc, t, cell)
+
     return sc
+
+
+# What the evacuee can actually walk, and how much of it a route should use.  Routes
+# at the full budget leave no slack for panic, smoke or a detour around fire; routes
+# at a fraction of it are over before the drones have done anything.
+WALK_MPS = 1.3
+ROUTE_FRACTION = 0.55
+REACH_MARGIN = 0.85
+
+
+def _variety(sc: Scenario, t, cell: float):
+    """A spread of origin/destination pairs and fire origins, as the paper has.
+
+    Origins and destinations are taken from around the edge of the reachable area
+    and paired across it, so every route crosses the map rather than clipping a
+    corner -- which is what the paper's forty pairs do, and why its evacuee "traverses
+    all regions of the map".
+    """
+    start = (torch.tensor(sc.human_start[0]) / cell).long()
+    reach = nav.distance_field(t.walkable, start[None], cell)[0]
+    ok = t.walkable & (reach < nav.UNREACHABLE / 2)
+    cells = ok.nonzero()
+    if len(cells) < 8:
+        return None, None
+
+    centre = cells.float().mean(0)
+    offset = cells.float() - centre
+    angle = torch.atan2(offset[:, 1], offset[:, 0])
+    radius = offset.norm(dim=-1)
+
+    # One perimeter point per sector: the cell furthest from the middle in each.
+    sectors = sc.n_routes
+    bucket = ((angle + math.pi) / (2 * math.pi) * sectors).long().clamp(0, sectors - 1)
+    rim = []
+    for k in range(sectors):
+        here = (bucket == k).nonzero().flatten()
+        if len(here):
+            rim.append(cells[here[radius[here].argmax()]])
+    if len(rim) < 4:
+        return None, None
+
+    # Paired by how long the walk actually takes, not by how far apart the two points
+    # look.  Pairing each rim point with the one opposite gave routes up to 217 m --
+    # further than a 1.3 m/s walker covers in a 60 s episode, so the evacuee reached
+    # safety in 6% of episodes and the rescuers were being scored on a deadline nobody
+    # could meet.  Distance here is geodesic: around buildings, which is the distance
+    # that matters and can be half again the straight line.
+    rim_t = torch.stack(rim)
+    fields = nav.distance_field(t.walkable, rim_t, cell)          # (rim, H, W)
+    between = fields[:, rim_t[:, 0], rim_t[:, 1]]                 # (rim, rim)
+
+    budget = sc.episode_seconds * WALK_MPS
+    want = budget * ROUTE_FRACTION
+    far = between.clone()
+    far[far > budget * REACH_MARGIN] = float("inf")               # cannot be walked
+    far.fill_diagonal_(float("inf"))
+
+    routes = []
+    for i, a_ in enumerate(rim):
+        j = int((far[i] - want).abs().argmin())
+        if not math.isfinite(float(far[i, j])):
+            continue                                             # nothing reachable
+        b_ = rim[j]
+        routes.append([(a_.float() * cell).tolist(), (b_.float() * cell).tolist()])
+    if len(routes) < 4:
+        return None, None
+
+    # Fire origins spread around the interior, on ground that will actually carry.
+    heavy = (t.fuel > 0.6) & ok
+    pool = heavy.nonzero().float()
+    if not len(pool):
+        pool = ok.nonzero().float()
+    step = max(1, len(pool) // sc.n_fire_origins)
+    order = (pool - centre).norm(dim=-1).argsort()
+    origins = [(pool[order[min(i * step, len(pool) - 1)]] * cell).tolist()
+               for i in range(sc.n_fire_origins)]
+    return routes, origins

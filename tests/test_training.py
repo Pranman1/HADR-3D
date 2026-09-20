@@ -79,17 +79,56 @@ def test_reaching_safety_pays_only_when_the_drones_helped():
     Observed in a real run: reward climbing past +60 while the capture rate sat at
     exactly zero, because the evacuee rescues themselves most of the time early on.
     """
-    unaided = view(reached_goal=torch.ones(1, dtype=torch.bool))
-    led = view(reached_goal=torch.ones(1, dtype=torch.bool),
-               was_captured=torch.ones(1, dtype=torch.bool))
+    one = torch.ones(1, dtype=torch.bool)
+    unaided = view(reached_goal=one, newly_reached=one)
+    led = view(reached_goal=one, newly_reached=one, was_captured=one)
 
     # Checked on the term itself, not on the total: the drones in this fixture can
     # see the person, and being paid for *that* is correct.
     assert float(ALL["reached_safety"](unaided)[0]) == 0.0, "self-rescue paid out"
-    assert float(ALL["reached_safety"](led)[0]) == 1.0
+    assert float(ALL["reached_safety"](led)[0]) > 0.0
 
     gain = float(Composer()(led).total) - float(Composer()(unaided).total)
     assert gain > 50.0, "an actual rescue should be worth a great deal more"
+
+
+def test_outcome_rewards_are_paid_once_not_every_step_after():
+    """`reached_goal` and `harmed` latch and stay true for the rest of the episode.
+
+    A term reading the latched flag is paid again on every remaining step: measured
+    at about 8,600 for a single rescue against 200 for the capture that caused it,
+    and -1,340 for a death regardless of anything the drones did.  Both swamped the
+    terms the policy can actually influence.  The edge is what gets paid.
+    """
+    one = torch.ones(1, dtype=torch.bool)
+    zero = torch.zeros(1, dtype=torch.bool)
+
+    arriving = view(reached_goal=one, newly_reached=one, was_captured=one)
+    still_there = view(reached_goal=one, newly_reached=zero, was_captured=one)
+    assert float(ALL["reached_safety"](arriving)[0]) > 0.0
+    assert float(ALL["reached_safety"](still_there)[0]) == 0.0, "paid twice"
+
+    dying = view(harmed=one, newly_harmed=one)
+    dead = view(harmed=one, newly_harmed=zero)
+    assert float(ALL["evacuee_harmed"](dying)[0]) == 1.0
+    assert float(ALL["evacuee_harmed"](dead)[0]) == 0.0, "charged twice"
+
+
+def test_leading_someone_to_safety_pays_for_the_whole_walk():
+    """`goal_progress` is the only term paying for the half of a rescue after the
+    capture.  Gated on the one-step `captured` edge rather than `was_captured` it
+    fired once per episode and contributed 0.19 points out of 760 -- so nothing in
+    the reward ever cared where the person was taken."""
+    one = torch.ones(1, dtype=torch.bool)
+    near = torch.zeros(1, 3)
+    far = torch.tensor([[200.0, 0.0, 0.0]])
+
+    holding = view(person_pos=far, goal=torch.zeros(1, 3), was_captured=one)
+    delivered = view(person_pos=near, goal=torch.zeros(1, 3), was_captured=one)
+    assert float(ALL["goal_progress"](delivered)[0]) > float(ALL["goal_progress"](holding)[0])
+
+    # ...and nothing at all before anyone has been reached.
+    assert float(ALL["goal_progress"](view(person_pos=near, goal=torch.zeros(1, 3)))[0]) == 0.0
 
 
 def test_rewards_only_read_what_the_team_believes():

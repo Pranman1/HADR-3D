@@ -53,8 +53,14 @@ HLR, LLR = 0, 1
 class TrainEnv:
     """A batch of independent episodes sharing one city."""
 
-    ALT_MIN = 2.0        # the ground
-    ALT_MAX = 120.0      # the regulatory ceiling almost everywhere
+    # An altitude band per role, because the roles *are* altitude bands.  The high
+    # rescuer is high and sees wide; the low one is low and sees under things.  One
+    # shared ceiling let the low rescuer climb to 120 m and sit there: its ground
+    # footprint grows with height, `coverage` pays for footprint, and farming that
+    # beat doing its actual job.  It is also simply what the paper describes.
+    ALT_BANDS = ((25.0, 120.0),      # HLR: high, wide, cannot intercept
+                 (2.0, 15.0))        # LLR: low, narrow, the only one that can
+    ALT_MIN, ALT_MAX = 2.0, 120.0    # kept for anything asking about the airspace
 
     def __init__(self, scenario, batch: int = 256, detector: str = "oracle",
                  fidelity: str = "point_mass", weights: dict | None = None,
@@ -90,6 +96,7 @@ class TrainEnv:
         self.reward = Composer(weights)
 
         self._start_alt = list(start_alt) if start_alt else [40.0, 4.0]
+        self.launch_offset_m = None    # set by a curriculum; None uses the fixed base
         self.reset()
 
     # ------------------------------------------------------------------ setup
@@ -103,29 +110,71 @@ class TrainEnv:
             self.rng_human = self.rng.fork("human")
             self.rng_sense = self.rng.fork("sense")
             self.rng_wind = self.rng.fork("wind")
+            self.rng_route = self.rng.fork("route")
             self.wind = (wind_mod.still(self.batch, self.device) if sc.wind_mps <= 0 else
                          wind_mod.make(self.batch, sc.wind_mps, sc.wind_bearing_deg,
                                        device=self.device))
             self.step_count = torch.zeros(self.batch, dtype=torch.long, device=self.device)
             mask = torch.ones(self.batch, dtype=torch.bool, device=self.device)
 
-        start = torch.tensor(sc.human_start[0], device=self.device)
-        goal = torch.tensor(sc.human_goal[0], device=self.device)
-        self.goal = goal.expand(self.batch, 2)
+        # A different route and a different fire per environment, drawn from the
+        # scenario's spread.  With one of each, every environment in the batch is the
+        # same episode: the policy memorises a trajectory instead of learning a task,
+        # and an untrained network scores 0% or 100% purely on which way its constant
+        # action happens to point.
+        if sc.routes:
+            pick = self.rng_route.integers(0, len(sc.routes), self.batch)
+            routes = torch.tensor(sc.routes, device=self.device, dtype=torch.float32)
+            start = routes[pick, 0]
+            goal = routes[pick, 1]
+            fires = torch.tensor(sc.fire_origins, device=self.device, dtype=torch.float32)
+            ignite = fires[self.rng_route.integers(0, len(fires), self.batch)]
+        else:
+            start = torch.tensor(sc.human_start[0], device=self.device).expand(self.batch, 2)
+            goal = torch.tensor(sc.human_goal[0], device=self.device).expand(self.batch, 2)
+            ignite = torch.tensor(sc.fire_at, device=self.device).expand(self.batch, 2)
+        self.goal = goal
+        self.start = start
 
         # Whole-batch resets only, for now: the fire and the person both carry state
         # that would need per-environment surgery, and the policy is trained on fixed
         # -length episodes where everything finishes together anyway.
-        self.fire.reset(torch.tensor([sc.fire_at], device=self.device).long()
-                        .expand(self.batch, 2), radius_m=sc.fire_radius_m)
-        self.human.reset(start.expand(self.batch, 2), goal.expand(self.batch, 2))
+        self.fire.reset((ignite / self.cell).long(), radius_m=sc.fire_radius_m)
+        self.human.reset(start, goal)
         self.smoke.update(self.fire, self.wind)
 
-        base = torch.tensor(sc.drone_start, device=self.device)
+        self._start_alt = [min(max(a, lo), hi) for a, (lo, hi)
+                           in zip(self._start_alt, self.ALT_BANDS)]
+        if self.launch_offset_m is None:
+            base = torch.tensor(sc.drone_start, device=self.device).expand(self.batch, 2)
+        else:
+            # The curriculum: launch a fixed distance from the person, so every
+            # environment poses the same difficulty whichever route it drew.
+            #
+            # On a random bearing, and that detail is the whole baseline.  Launching
+            # back along the route sounds right, but the routes start at the rim, so
+            # that bearing points off the map; falling back to the reverse parked the
+            # rescuer directly on the walk to safety, where a drone that never moved
+            # captured 45% of evacuees.  A policy cannot be credited for learning what
+            # hovering already does.  A random bearing puts it off the path, so
+            # closing the distance has to be flown.
+            w_m, h_m = self.terrain.extent_m
+            margin = 5.0
+            theta = self.rng_route.uniform(8, self.batch, high=2 * math.pi)
+            cand = start[None] + self.launch_offset_m * torch.stack(
+                [theta.cos(), theta.sin()], -1)
+            on_map = ((cand[..., 0] > margin) & (cand[..., 0] < w_m - margin)
+                      & (cand[..., 1] > margin) & (cand[..., 1] < h_m - margin))
+            # The first bearing that lands on the map; if none does, the last one,
+            # clamped -- which only happens for a start hard against a corner.
+            first = torch.where(on_map.any(0), on_map.float().argmax(0),
+                                torch.full_like(on_map[0], 7, dtype=torch.long))
+            base = cand[first, torch.arange(self.batch, device=self.device)]
+            base = torch.stack([base[:, 0].clamp(margin, w_m - margin),
+                                base[:, 1].clamp(margin, h_m - margin)], -1)
         for i, drone in enumerate(self.drones):
-            pos = torch.cat([base.expand(self.batch, 2),
-                             torch.full((self.batch, 1), self._start_alt[i],
-                                        device=self.device)], -1)
+            pos = torch.cat([base, torch.full((self.batch, 1), self._start_alt[i],
+                                              device=self.device)], -1)
             drone.reset(pos)
 
         self.step_count.zero_()
@@ -137,6 +186,16 @@ class TrainEnv:
         self._first_seen = torch.full((self.batch,), -1.0, device=self.device)
         self._last_pos = torch.zeros(self.batch, 3, device=self.device)
         self._last_age = torch.full((self.batch,), 1e3, device=self.device)
+        # Environments whose episode is still running.  The batch resets together --
+        # the fire and the person carry state that would need per-environment surgery
+        # -- so an episode that ends at step 73 of 100 keeps being stepped for another
+        # 27, and every one of those steps was being paid and trained on.  Measured on
+        # the paper grid: *every* episode ends early, a quarter of all training steps
+        # happened after the episode they belong to was over.
+        self.active = torch.ones(self.batch, dtype=torch.bool, device=self.device)
+        self._was_reached = torch.zeros(self.batch, dtype=torch.bool, device=self.device)
+        self._was_harmed = torch.zeros(self.batch, dtype=torch.bool, device=self.device)
+        self._newly = (self._was_reached, self._was_harmed)
         return self.observe()
 
     # ------------------------------------------------------------- perception
@@ -318,35 +377,73 @@ class TrainEnv:
         """One policy decision. `actions` is (B, 2, 4). Returns obs, reward, done, info."""
         dt = self.clock.dt
         w_m, h_m = self.terrain.extent_m
+        llr_drone = self.drones[LLR]
+        running = self.active.clone()
+        # A finished environment stops flying as well as stops being paid; otherwise
+        # its drones wander on and the observations they feed the recurrent state are
+        # from an episode that no longer exists.
+        actions = actions * running[:, None, None].float()
+        reach = torch.zeros(self.batch, dtype=torch.bool, device=self.device)
+
         for _ in range(self.clock.substeps):
             for i, drone in enumerate(self.drones):
                 drone.step(actions[:, i], dt)
-                drone.confine(w_m, h_m, self.ALT_MIN, self.ALT_MAX)
+                lo, hi = self.ALT_BANDS[i]
+                drone.confine(w_m, h_m, lo, hi)
             self.human.integrate(
                 self.crowd.step(self.human.pos, self.human.vel, self._want, dt), dt)
             self.wind.step(dt, self.rng_wind)
             self.fire.step(dt, self.wind, self.rng_fire)
+
+            # Checked every substep, not once per decision.  The low rescuer travels
+            # six metres between decisions at full speed against a three metre
+            # capture radius, so sampling at the control rate lets it fly straight
+            # through somebody and register nothing -- which looks exactly like a
+            # policy that cannot close, and is not.
+            reach |= ((llr_drone.pos[:, :2] - self.human.pos).norm(dim=-1)
+                      < self.capture_radius)
 
         self.smoke.update(self.fire, self.wind)
         # Computed once and shared. "How near is the fire" was being worked out three
         # times a step -- once for the person's panic and once per drone for the
         # reward -- over the whole map each time.
         self._fire_near = nav.proximity(self.fire.intensity, 12.0, self.cell)
-        self.searched = torch.zeros(self.batch, *self.terrain.shape, device=self.device)
-        self._new_area = torch.zeros(self.batch, device=self.device)
-        self._first_seen = torch.full((self.batch,), -1.0, device=self.device)
+        # `searched` and `_first_seen` accumulate across the episode and are reset in
+        # `reset()`.  Three lines re-initialising them *here* -- leftovers from that
+        # function -- quietly turned both of their reward terms inside out: `coverage`
+        # pays for ground newly looked at, so a wiped map made the whole footprint new
+        # again every step and a stationary hover collected it forever; `first_sight`
+        # pays once for finding somebody, and became 20 a step for staring at them.
+        # Against 200 for a capture, over a 240-step episode, watching was worth more
+        # than twenty rescues.  The policy was not failing to learn -- it had learned
+        # exactly what it was paid for, which is why every city run ended at "person
+        # seen 100%, captured 0%".
         self._want = self.human.desired_velocity(
             self.fire, self.smoke, self.rng_human, self.clock.control_dt)
+        self._want = self._want * running[:, None].float()
         self.human.expose_to(self.fire)
         self._sweep()
 
         # Capture is the low rescuer's job alone -- the high one cannot intercept,
         # which is the asymmetry the whole paper is about.
-        llr = self.drones[LLR]
-        reach = (llr.pos[:, :2] - self.human.pos).norm(dim=-1) < self.capture_radius
+        #
+        # Only while the episode is actually running.  A finished environment keeps
+        # being stepped until the batch resets together, and its evacuee kept walking
+        # -- occasionally straight into a parked rescuer, registering a capture for an
+        # episode that was already over.  Measured: 3 of 13 recorded captures.  The
+        # reward was already masked, so this never misled the *policy*, only the
+        # metric everything is reported in.
+        reach &= running
         newly = reach & ~self.captured
         self.captured |= reach
-        self.human.led_by(llr.pos[:, :2], self.capture_radius)
+        # Edges, not levels.  `reached` and `harmed` latch and stay true, so a term
+        # reading them directly is paid again on every remaining step of the episode.
+        newly_reached = self.human.reached & ~self._was_reached
+        newly_harmed = self.human.harmed & ~self._was_harmed
+        self._was_reached = self.human.reached.clone()
+        self._was_harmed = self.human.harmed.clone()
+        self._newly = (newly_reached, newly_harmed)
+        self.human.led_by(llr_drone.pos[:, :2], self.capture_radius)
 
         obs = self.observe()
         seen = obs["seen_by"].any(-1)
@@ -358,7 +455,9 @@ class TrainEnv:
 
         done = ((self.step_count >= self.clock.max_steps)
                 | self.human.reached | self.human.harmed)
-        return obs, reward.total, done, {"parts": reward.summary(),
+        self.active = running & ~done
+        total = reward.total * running.float()
+        return obs, total, done, {"parts": reward.summary(),
                                          "captured": self.captured,
                                          "reached": self.human.reached,
                                          "harmed": self.human.harmed}
@@ -387,5 +486,7 @@ class TrainEnv:
             new_area=self._new_area,
             newly_seen=(newly_seen if newly_seen is not None
                         else torch.zeros_like(self.human.reached)),
+            newly_reached=self._newly[0],
+            newly_harmed=self._newly[1],
             time_left=self._time_left(),
         )

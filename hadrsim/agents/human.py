@@ -81,7 +81,8 @@ class PanicParams:
     follow_noise: float = 0.25   # how imprecisely
     lose_sight_smoke: float = 0.8  # smoke density at which the rescuer is lost
     body_radius_m: float = 0.28  # shoulder half-width. Sets the narrowest usable gap
-    replan_every_s: float = 4.0  # nobody re-plans their route continuously
+    replan_every_s: float = 2.0  # nobody re-plans continuously; the fire ticks at 1 Hz
+    burnt_cost: float = 20.0     # ash is crossed only if the way round is 21x longer
     fire_detour_cost: float = 60.0   # how far out of the way a fire is worth going
 
 
@@ -132,28 +133,49 @@ class Human:
         if not bool(self._passable[tuple((self.goal[0] / cell).long().tolist())]):
             self._passable = self.terrain.walkable      # a goal in a doorway still works
 
-        self._replanned_at = -self.p.replan_every_s
         self._replan(fire=None)
+        # Marked as never planned, *after* the fire-blind plan above has set the
+        # timestamp -- so the first real step replans with the fire in view.  With the
+        # order reversed, the first fire-aware route came two seconds in, by which
+        # time a person walking a straight line had committed to it.
+        self._replanned_at = -self.p.replan_every_s
         # Start out heading the sensible way, so panic degrades a good plan rather
         # than starting from a random one.
         self.instinct_dir = nav.sample(self._flow, self.pos, cell).clone()
 
     def _replan(self, fire) -> None:
-        """Recompute the route, pricing cells near the fire out of it.
+        """Recompute the route around the fire.
 
-        Not a hard exclusion: a person will pass closer to a fire than they would
-        like if the alternative is a long way round, and will not if it is not.  A
-        cost multiplier says that, where a blocked/unblocked mask cannot.
+        **A burning cell cannot be entered.**  That is the paper's rule, kept exactly:
+        `Fire.can_overlap` in `firegrid` is true only for the drones, so the evacuee's
+        A* treats fire as a wall.  An earlier version here priced fire at 61x instead
+        of blocking it, and people walked through it whenever the way round was long
+        -- which it always is on a real block.
+
+        Two things the paper has no need for, because its fire never goes out:
+        burnt ground costs `burnt_cost` (nobody walks across hot ash if there is a
+        street), and cells within 12 m of flame are priced up so the route keeps its
+        distance rather than hugging the edge.
+
+        If the fire has cut every route, the field is unreachable from where they
+        stand; then, and only then, the block is relaxed to a very high price so
+        they head for the least-bad way out instead of standing still.
         """
         cell = self.terrain.cell_size_m
-        cost = None
-        if fire is not None:
+        goal = (self.goal / cell).long()
+        if fire is None:
+            self._dist = nav.distance_field(self._passable, goal, cell)
+        else:
             near = nav.proximity(fire.intensity, 12.0, cell)
-            cost = 1.0 + self.p.fire_detour_cost * near
+            cost = 1.0 + self.p.fire_detour_cost * near + self.p.burnt_cost * fire.burnt.float()
+            passable = self._passable[None] & ~fire.burning
+            self._dist = nav.distance_field(passable, goal, cell, cost=cost)
 
-        self._dist = nav.distance_field(
-            self._passable, (self.goal / cell).long(), cell, cost=cost
-        )
+            stuck = nav.sample(self._dist, self.pos, cell) >= nav.UNREACHABLE / 2
+            if bool(stuck.any()):
+                worst = cost + 1e3 * fire.burning.float()
+                fallback = nav.distance_field(self._passable, goal, cell, cost=worst)
+                self._dist = torch.where(stuck[:, None, None], fallback, self._dist)
         self._flow = nav.flow(self._dist)
         self._replanned_at = self.elapsed
 

@@ -44,7 +44,17 @@ import torch
 from hadrsim.world.raster import fill_polygon, stroke_line
 from hadrsim.world.terrain import LLR_CLEARANCE_M, Footprint, Terrain
 
-OVERPASS = "https://overpass-api.de/api/interpreter"
+# Several, tried in turn.  The main instance rate-limits hard -- ten district-sized
+# queries in a row is enough to have it refuse connections outright for a while --
+# and a map fetch failing is the difference between a night of training and none.
+# All of them speak the same API and serve the same planet data.
+OVERPASS_MIRRORS = (
+    "https://overpass-api.de/api/interpreter",
+    "https://overpass.kumi.systems/api/interpreter",
+    "https://overpass.private.coffee/api/interpreter",
+    "https://overpass.osm.jp/api/interpreter",
+)
+OVERPASS = OVERPASS_MIRRORS[0]
 NOMINATIM = "https://nominatim.openstreetmap.org/search"
 UA = "hadrsim/0.1 (research simulator; contact via github.com/sastry-group)"
 
@@ -188,16 +198,23 @@ def fetch(bbox: BBox, cache_dir: str | Path = "maps/osm_cache") -> dict:
 
     import requests
 
+    trouble = []
     for attempt in range(3):
-        r = requests.post(OVERPASS, data={"data": q}, headers={"User-Agent": UA},
-                          timeout=300)
-        if r.status_code == 200:
-            cache.parent.mkdir(parents=True, exist_ok=True)
-            cache.write_text(r.text)
-            return r.json()
-        time.sleep(5 * (attempt + 1))    # Overpass rate-limits; back off and retry
-    r.raise_for_status()
-    raise RuntimeError("unreachable")
+        for host in OVERPASS_MIRRORS:
+            try:
+                r = requests.post(host, data={"data": q},
+                                  headers={"User-Agent": UA}, timeout=300)
+            except requests.RequestException as e:
+                trouble.append(f"{host}: {type(e).__name__}")
+                continue
+            if r.status_code == 200:
+                cache.parent.mkdir(parents=True, exist_ok=True)
+                cache.write_text(r.text)
+                return r.json()
+            trouble.append(f"{host}: HTTP {r.status_code}")
+        time.sleep(10 * (attempt + 1))   # every mirror busy; back off and go round again
+    raise RuntimeError("no Overpass mirror would answer:\n  "
+                       + "\n  ".join(trouble[-len(OVERPASS_MIRRORS):]))
 
 
 # -------------------------------------------------------------------- tags

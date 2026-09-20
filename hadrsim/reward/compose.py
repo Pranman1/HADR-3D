@@ -51,6 +51,9 @@ DEFAULT = {
     "first_sight": 20.0,
     "coverage": 10.0,
     "evacuee_harmed": -100.0,
+    # Closeness while in view -- the paper's detection window was 2.5 m, so its
+    # "detected" already meant "close"; ours needs to say so separately.
+    "apparent_size": 5.0,
 }
 
 
