@@ -33,7 +33,13 @@ from hadrsim.eval import evaluate
 from hadrsim.policy.ppo import PPO, PPOConfig
 from hadrsim.reward.compose import DEFAULT
 from hadrsim.scenario import Scenario, autoplace
-from city import report
+
+
+def report(env, tag, net=None, deterministic=True):
+    """One printed row through the shared evaluator; returns capture %."""
+    m = evaluate(env, net, deterministic=deterministic)
+    print(m.line(tag))
+    return m.capture
 from reward_sweep import FIDELITY, DETECTOR, VARIANTS
 
 # Promotion is decided on a *full-episode, deterministic* evaluation every EVAL_EVERY

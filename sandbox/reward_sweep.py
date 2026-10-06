@@ -30,10 +30,17 @@ sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1]))
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
 
 from hadrsim.envs.train import TrainEnv
+from hadrsim.eval import evaluate
 from hadrsim.policy.ppo import PPO, PPOConfig
 from hadrsim.reward.compose import DEFAULT
 from hadrsim.scenario import Scenario, autoplace
-from city import report
+
+
+def report(env, tag, net=None, deterministic=True):
+    """One printed row through the shared evaluator; returns capture %."""
+    m = evaluate(env, net, deterministic=deterministic)
+    print(m.line(tag))
+    return m.capture
 
 BASE = dict(DEFAULT)
 
