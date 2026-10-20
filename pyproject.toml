@@ -5,6 +5,7 @@ description = "A 3D simulator and gym for drone-assisted fire evacuation: real c
 readme = "README.md"
 requires-python = ">=3.10"
 license = { text = "MIT" }
+authors = [{ name = "Pranav Bhatt" }]
 dependencies = [
     "torch>=2.1",
     "numpy",
