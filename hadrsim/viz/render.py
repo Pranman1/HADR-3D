@@ -170,3 +170,60 @@ def _cross(img: np.ndarray, cx: float, cy: float, r: int, colour) -> None:
     t = max(1, r // 4)
     img[max(0, cx - t):min(h, cx + t), max(0, cy - r):min(w, cy + r)] = colour
     img[max(0, cx - r):min(h, cx + r), max(0, cy - t):min(w, cy + t)] = colour
+
+
+def main(argv=None) -> None:
+    """Fly a policy and write a video.  Deterministic by default: what the policy
+    believes, not what its exploration noise happened to do.
+
+        hadrsim-watch checkpoints/sweep_closeness.pt -o rescue.mp4
+        hadrsim-watch last_sighting --city "Venice San Marco" --episodes 2
+    """
+    import argparse
+
+    import torch
+
+    from hadrsim.env import Env
+    from hadrsim.policy import base
+    from hadrsim.scenario import Scenario, autoplace
+
+    p = argparse.ArgumentParser(description=main.__doc__.split("\n")[0])
+    p.add_argument("policy", help="checkpoint path, or hover / lawnmower / last_sighting")
+    p.add_argument("--city", default="Downtown Berkeley")
+    p.add_argument("--radius", type=float, default=100.0)
+    p.add_argument("--seconds", type=float, default=120.0)
+    p.add_argument("--launch", type=float, default=25.0)
+    p.add_argument("--fidelity", default="quadrotor")
+    p.add_argument("--detector", default="geometric")
+    p.add_argument("--episodes", type=int, default=4)
+    p.add_argument("--stochastic", action="store_true")
+    p.add_argument("--fps", type=int, default=20)
+    p.add_argument("-o", "--out", default="rescue.mp4")
+    a = p.parse_args(argv)
+
+    dev = "cuda" if torch.cuda.is_available() else "cpu"
+    env = Env(autoplace(Scenario.preset(a.city, radius_m=a.radius, cell_size_m=2.0,
+                                        episode_seconds=a.seconds, wind_mps=0.0, seed=0)),
+              batch=1, fidelity=a.fidelity, detector=a.detector, device=dev)
+    env.launch_offset_m = a.launch
+    policy = base.load(a.policy, dev)
+    rec = Recorder(env.terrain, scale=max(2, int(420 / max(env.terrain.shape))))
+    tally = {"captured": 0, "reached": 0, "lost": 0}
+    with torch.no_grad():
+        for ep in range(a.episodes):
+            env.scenario.seed = ep
+            obs, state, got = env.reset(), None, {}
+            for _ in range(env.clock.max_steps):
+                act, _, _, state = policy.act(obs, state, deterministic=not a.stochastic)
+                obs, _, _, info = env.step(act)
+                rec.frame(env.fire, env.smoke, env.human, env.drones, env.cameras)
+                got = {k: got.get(k, False) or bool(info[k][0]) for k in ("captured", "reached", "harmed")}
+            tally["captured"] += got["captured"]; tally["reached"] += got["reached"]; tally["lost"] += got["harmed"]
+            print(f"  episode {ep + 1}: {'captured' if got['captured'] else 'not captured':<13} "
+                  f"{'reached safety' if got['reached'] else 'lost to the fire' if got['harmed'] else 'ran out of time'}")
+    print(f"  {tally['captured']}/{a.episodes} captured, {tally['reached']}/{a.episodes} reached safety, "
+          f"{tally['lost']}/{a.episodes} lost\n  wrote {rec.save(a.out, fps=a.fps)}")
+
+
+if __name__ == "__main__":
+    main()

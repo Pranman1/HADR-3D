@@ -1,7 +1,7 @@
 """Which reward balance gets a rescue on a real city block?  Ranks variants by gain
 over doing nothing; short runs, so it ranks rather than produces a final number.
 
-    python sandbox/reward_sweep.py 150        # iterations per variant
+    python experiments/reward_sweep.py 150        # iterations per variant
 """
 
 import json
