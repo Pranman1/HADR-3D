@@ -241,9 +241,8 @@ view and `gui/scene3d.js` the 3D one. `viz/render.py` writes mp4s.
 ### `tools/shot3d.py` — headless screenshots of the panel (Playwright).
 ### `tests/` — 183 tests; `test_golden.py` is the bit-for-bit refactor guard. CI runs them on CPU.
 ### documents
-`initial_plan_doc.md` (design; §13 changes-from-paper table), `OVERNIGHT_FINDINGS.md`
-(what was found, section by section, with measurements), `WHAT_WE_BUILT.md`
-(summary), `PENDING.md` (ordered next steps), `docs/figures.html` (result figures).
+`OVERNIGHT_FINDINGS.md` (what was found, section by section, with measurements),
+`PENDING.md` (ordered next steps).
 
 ---
 
