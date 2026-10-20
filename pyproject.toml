@@ -41,4 +41,4 @@ hadrsim = ["configs/**/*.yaml", "gui/*.html", "gui/*.js"]
 # The lab box has ROS 2 on the path and its pytest plugins break collection;
 # run with PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 there.
 addopts = "-p no:cacheprovider"
-testpaths = ["tests"]
+testpaths = ["tests", "experiments"]   # the tool, then our research on it
