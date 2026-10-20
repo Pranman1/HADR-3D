@@ -56,7 +56,7 @@ hadrsim/
   ros.py      hadrsim-ros: the gym at batch 1 on ROS 2 topics (optional, needs a sourced ROS 2)
 experiments/  our research on top of the tool: city_reward.{py,yaml} (eight extra terms
               and the balance every checkpoint so far used), paper_parity, reward_sweep, sweep.yaml
-tests/        183 tests; test_golden.py is the bit-for-bit regression guard
+tests/        195 tests; test_golden.py is the bit-for-bit regression guard
 maps/         OpenStreetMap cache for the ten preset cities at 100 m radius
 ```
 
