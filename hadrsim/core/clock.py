@@ -1,27 +1,4 @@
-"""Time, in seconds.
-
-The paper welds every clock together: one step is 5 drone sub-moves, 3 person
-sub-moves and 1 fire tick, capped at 100 steps.  That is fine on a grid and
-meaningless in continuous time, so here each rate is stated in Hz and everything
-else is derived.
-
-Four rates, not one:
-
-    physics   100 Hz   bodies move: integration of the equations of motion
-    human      10 Hz   how often the person reconsiders where to go
-    control     2 Hz   how often the *policy* gets to decide
-    fire        1 Hz   how often the fire tries to spread
-
-They are separate because they are separate in reality: a real drone's autopilot
-runs far faster than any planner above it, a person re-aims several times a second
-without replanning their route, and a fire cares about none of it.
-
-**Deciding slowly is not the same as moving slowly.**  The policy choosing twice a
-second does not mean anything jumps twice a second -- between decisions, bodies keep
-integrating at 100 Hz under the last command they were given.  That is what makes
-the motion continuous rather than a sequence of teleports, and it is why anything
-that steps the world at the control rate alone looks, and is, wrong.
-"""
+"""Rates and the episode length. Physics 100 Hz, person 10 Hz, policy 2 Hz, fire 1 Hz."""
 
 from __future__ import annotations
 
@@ -52,19 +29,15 @@ class Clock:
 
     @property
     def substeps(self) -> int:
-        """Physics steps per policy decision. 50, at the default rates."""
+        """Physics steps per policy decision."""
         return max(1, round(self.physics_hz / self.control_hz))
 
     @property
     def human_substeps(self) -> int:
-        """Physics steps between one decision by the person and the next. 10."""
+        """Physics steps between one decision by the person and the next."""
         return max(1, round(self.physics_hz / self.human_hz))
 
     @property
     def max_steps(self) -> int:
-        """Policy decisions in one episode. 240, at the default rates.
-
-        The paper's cap was 100 steps of a quite different kind, so this number is
-        not comparable to it and should not be quoted as if it were.
-        """
+        """Policy decisions in one episode."""
         return max(1, round(self.episode_seconds * self.control_hz))

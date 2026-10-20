@@ -1,13 +1,6 @@
-"""What a camera sees: a small semantic image, rendered from the drone's pose.
-
-Five channels at 32x32 -- building, ground, fire, smoke, objects -- made by marching every
-pixel's ray through the height map, the fire, and the smoke column, and by projecting
-upright silhouettes into the frame: the person (1.7 m, when the ray-marcher says they
-are visible) *and* seeded street clutter of person-like sizes.  The person is not
-labelled in the picture; a detector has to tell them from a bin by shape and context,
-and loses them when they shrink below a pixel.  Not photoreal: a pixel says what kind
-of thing is there, not what colour it is.  On hardware the camera replaces this file.
-"""
+"""A 5x32x32 semantic image per drone (building, ground, fire, smoke, objects), made by
+marching each pixel's ray.  The person and seeded clutter share the objects channel, so
+nothing in the picture says "person".  On hardware a real camera replaces this."""
 
 from __future__ import annotations
 
@@ -58,7 +51,7 @@ def project(camera: fov.Camera, pos: torch.Tensor, quat: torch.Tensor, points: t
 
 
 def clutter(terrain, k: int = CLUTTER, seed: int = 0):
-    """(K, 2) positions on open ground, (K,) heights, (K,) widths; fixed per map."""
+    """(K, 2) positions on open ground, (K,) heights, (K,) widths; seeded, fixed per map."""
     key = ("_clutter", k, seed)
     if not hasattr(terrain, "_clutter") or terrain._clutter[0] != key:
         g = torch.Generator().manual_seed(seed)

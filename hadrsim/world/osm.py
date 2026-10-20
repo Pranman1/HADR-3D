@@ -1,33 +1,5 @@
-"""Real buildings, from OpenStreetMap.
-
-The paper's map is a 25 x 25 checkerboard.  This loader builds the same `Terrain`
-from an actual place -- real footprints, real heights, real streets -- so the
-occlusion the drones have to see through is a real city block rather than a grid.
-
-What the simulation actually consumes is unchanged: a height field, a fuel field,
-and two passability masks.  A box with a real footprint and a real height blocks a
-sight line exactly as a detailed mesh would, and the policy never sees pixels.  So
-visual fidelity buys nothing here; *geometric* fidelity buys everything, and this is
-where it comes from.
-
-Three OSM facts drive the code below:
-
-  - Heights are mostly absent.  Around a third of buildings carry `building:levels`
-    and almost none carry `height`, so most heights are inferred.  `_height_m` is
-    where that guessing lives, and it is the least trustworthy thing in this file.
-
-  - `building=roof` is OSM's tag for a roof with no walls -- a carport, a bandstand,
-    a fuel-station canopy.  That is exactly the canopy the paper's map implies, so
-    the low-drone-sees-under-it asymmetry arrives from real data for free.
-
-  - Roads are the firebreaks -- and the only real ones.  Buildings burn, and burn
-    hardest; what actually stops an urban fire is the street.  Rasterising the road
-    network to zero fuel is most of what makes a city fire behave like a city fire,
-    and giving buildings zero fuel instead would say a city cannot have one.
-
-Results are cached under maps/osm_cache/ by bounding box, so a scenario built from a
-real place stays reproducible offline and Overpass is queried once.
-"""
+"""A real city block from OpenStreetMap: buildings with heights, canopies, roads, fuel by
+land use.  Fetched through Overpass mirrors and cached on disk by bounding box."""
 
 from __future__ import annotations
 
@@ -44,10 +16,6 @@ import torch
 from hadrsim.world.raster import fill_polygon, stroke_line
 from hadrsim.world.terrain import LLR_CLEARANCE_M, Footprint, Terrain
 
-# Several, tried in turn.  The main instance rate-limits hard -- ten district-sized
-# queries in a row is enough to have it refuse connections outright for a while --
-# and a map fetch failing is the difference between a night of training and none.
-# All of them speak the same API and serve the same planet data.
 OVERPASS_MIRRORS = (
     "https://overpass-api.de/api/interpreter",
     "https://overpass.kumi.systems/api/interpreter",
@@ -62,30 +30,15 @@ LEVEL_M = 3.0           # a storey, where only `building:levels` is given
 ROOF_LEVEL_M = 2.0      # a roof storey is shorter than a floor
 DEFAULT_LEVELS = 2.0    # untagged buildings. Most of OSM, unfortunately
 
-# Below this, a mapped building has nothing above ground worth occluding.  Real
-# example from downtown Berkeley: the BART station is tagged `building:levels=0`
-# with `building:levels:underground=2`, because it is underground.  Extruding that
-# to zero height makes a degenerate mesh; the honest answer is to leave the ground
-# clear, so it is skipped entirely rather than floored to some minimum.
 MIN_BUILDING_M = 2.0
 
 # A roof with no walls. The low drone sees underneath; the high drone does not.
 CANOPY_BUILDINGS = {"roof", "carport", "canopy", "bandstand"}
 
-# Canopies are almost never tagged with a height, and the generic building default
-# (two storeys, 6 m) is far too tall for a carport or a bus shelter.  It also
-# quietly destroys the mechanism they exist for: at 6 m the low drone flies under
-# every canopy in the city, so the "person is under a roof the high drone cannot
-# see through, and the low drone must go and look" situation never arises.
 DEFAULT_CANOPY_M = 3.0
 CANOPY_THICKNESS_M = 0.4
 MIN_HEADROOM_M = 2.2    # a canopy you could not walk under would be a wall
 
-# How readily each surface carries fire.  Nothing is exactly zero except open water,
-# because almost nothing in a city is: a street has trees along it, cars parked on
-# it, bins, market stalls and spilled fuel.  A road slows a fire and steers it; it
-# does not reliably stop one, and treating it as an absolute barrier is as wrong as
-# treating buildings as fireproof.
 FUEL_GROUND = 0.7       # ordinary ground: some vegetation, some pavement
 FUEL_VEG = 1.5          # parks, grass, woodland
 FUEL_TREE = 1.8         # street trees and tree rows: the fastest thing on the block
@@ -138,18 +91,13 @@ class BBox:
         )
 
     def key(self, query: str = "") -> str:
-        """Cache key. Includes the query, not just the box.
-
-        Keying on the bounding box alone means that adding a feature type -- street
-        trees, car parks, water -- silently serves the old response, which has none of
-        them, and the new code looks broken rather than stale.
-        """
+        """Cache key over the box and the query."""
         blob = f"{self.south:.6f},{self.west:.6f},{self.north:.6f},{self.east:.6f}|{query}"
         return hashlib.sha1(blob.encode()).hexdigest()[:16]
 
 
 def geocode(place: str) -> tuple[float, float]:
-    """Place name -> (lat, lon). One call, then cached by whoever holds the bbox."""
+    """Place name -> (lat, lon)."""
     import requests
 
     r = requests.get(
@@ -231,11 +179,7 @@ def _parse_len(v: str) -> float | None:
 
 
 def _height_m(tags: dict, default_m: float | None = None) -> float:
-    """Best available height. Mostly a guess, and the weakest link in this file.
-
-    `default_m` overrides the fallback for things that are not ordinary buildings --
-    a carport is not two storeys tall.
-    """
+    """Best available height from tags: explicit height, then levels, then a default."""
     for key in ("height", "building:height"):
         if key in tags and (h := _parse_len(tags[key])) is not None:
             return h
@@ -277,14 +221,14 @@ def _surface_fuel(tags: dict) -> float | None:
 # ------------------------------------------------------------- geometry
 
 def _project(bbox: BBox):
-    """lat/lon -> metres from the box's south-west corner. Flat earth; fine at 1 km."""
+    """lat/lon -> metres from the box's south-west corner."""
     lat0, _ = bbox.centre
     mx = M_PER_DEG_LAT * math.cos(math.radians(lat0))
     return lambda lat, lon: ((lon - bbox.west) * mx, (lat - bbox.south) * M_PER_DEG_LAT)
 
 
 def _rings(el: dict, proj) -> list[np.ndarray]:
-    """Outlines of one element, in metres. Handles ways and multipolygon relations."""
+    """Outlines of one element, in metres."""
     out = []
     if el["type"] == "way" and el.get("geometry"):
         out.append(el["geometry"])
@@ -311,10 +255,7 @@ def load(
     cache_dir: str | Path = "maps/osm_cache",
     device="cpu",
 ) -> Terrain:
-    """Build a Terrain from a real place.
-
-    >>> load("Downtown Berkeley, California", radius_m=250)
-    """
+    """Build a `Terrain` from a real place (by name or bounding box)."""
     if bbox is None:
         if place is None:
             raise ValueError("give either a place name or a bbox")
@@ -354,13 +295,8 @@ def load(
         width = width or ROAD_WIDTH_M.get(tags["highway"], DEFAULT_ROAD_WIDTH_M)
         if (hit := stroke_line(line, width, shape, cell_size_m)) is not None:
             sl, mask = hit
-            # Take the lower of the two: a road through a park is still a road, but a
-            # road already marked as water (a ford, a bridge deck over a river) stays
-            # the barrier it is.
             fuel[sl][mask] = np.minimum(fuel[sl][mask], FUEL_ROAD)
 
-    # Street trees, which OSM maps as individual points. They are what carries a fire
-    # along a road that would otherwise slow it down.
     for el in data["elements"]:
         if el.get("type") != "node" or el.get("tags", {}).get("natural") != "tree":
             continue
@@ -381,8 +317,6 @@ def load(
         if h < MIN_BUILDING_M:
             continue                    # underground, or mapped without a structure
 
-        # A canopy is a slab of air-thickness at height h, with usable ground under
-        # it.  A building is solid from the ground up.
         base, top = (max(h - CANOPY_THICKNESS_M, MIN_HEADROOM_M), h) if canopy else (0.0, h)
 
         for ring in _rings(el, proj):

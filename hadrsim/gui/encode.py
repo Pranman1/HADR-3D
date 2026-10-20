@@ -1,9 +1,4 @@
-"""What the panel sends down the wire: the static map once, then a small frame.
-
-The city is a PNG drawn underneath; building heights are run-length encoded so the
-3D view can extrude them; per frame, fire + scar + smoke is one RGBA overlay at cell
-resolution, plus the hottest cells as a list for the flames, plus the wind vector.
-"""
+"""What the panel sends down the wire: the map once, then a small frame each tick."""
 
 from __future__ import annotations
 
@@ -24,7 +19,7 @@ def _png(array: np.ndarray, mode: str | None = None) -> str:
 
 
 def map_png(runner) -> str:
-    """The static city. Sent once per scenario."""
+    """The static city."""
     return _png(Recorder(runner.terrain, scale=1)._base)
 
 

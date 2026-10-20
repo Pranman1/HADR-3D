@@ -1,20 +1,5 @@
-"""A scenario: everything that makes one run different from another.
-
-The place, the weather, where the fire starts, who is in it and where they begin.
-One object, buildable from a dict, a yaml file, or a GUI form -- which matters
-because all three have to produce *the same thing*.  A control panel that quietly
-constructs a slightly different world from the training config is a very expensive
-kind of bug.
-
-Nothing here decides anything: it holds what was decided.  The pickers that turn
-"somewhere sensible on this map" into actual coordinates live in `autoplace`, so
-that a hand-specified scenario and an auto-placed one differ only in who filled the
-fields in.
-
-Terrain is cached by (place, radius, cell size).  Fetching and rasterising a city is
-a second or two, and a GUI that does it on every parameter change is a GUI nobody
-waits for.
-"""
+"""A scenario: place, weather, episode length, where people and fire start.  Buildable
+from a dict, a yaml or the panel form; `autoplace` fills in whatever was left blank."""
 
 from __future__ import annotations
 
@@ -28,19 +13,6 @@ from hadrsim.core.clock import Clock
 from hadrsim.world import nav, osm
 from hadrsim.world import terrain as terrain_mod
 
-# Places worth offering in a menu: a low-rise campus, a mid-rise downtown, and two
-# skylines. Enough variety that a policy trained on one is visibly tested by another.
-# Chosen for *morphology*, not for being famous.  A policy that only ever sees one
-# street pattern has learned that pattern, and the way to find out is to fly it
-# somewhere shaped differently: a regular grid with long sightlines, a medieval core
-# where nothing is straight and every corner is blind, a campus of free-standing
-# blocks with open ground between them, a strip hemmed in by water.  These are the
-# held-out maps in `sandbox/generalise.py`.
-# Pinned to coordinates rather than to a name, because a geocoder is not a fixed
-# thing: "Eixample, Barcelona" resolved to 41.488, 2.293 -- eight kilometres outside
-# the district, in open ground near Montgat -- and produced a map 2.7% built where
-# the real Eixample is one of the densest grids in Europe.  A map that silently
-# changes when a gazetteer is edited is not a map a result can rest on.
 PRESETS = {
     "Downtown Berkeley":     ("Downtown Berkeley, California",   37.87010, -122.26814, 150.0),
     "UC Berkeley campus":    ("UC Berkeley campus",              37.86843, -122.26052, 180.0),
@@ -83,12 +55,6 @@ class Scenario:
     fire_radius_m: float = 2.5
     drone_start: list | None = None       # [x, y] launch point, shared by the team
 
-    # Variety across a training batch, as the paper has it: 40 origin/destination
-    # pairs and 4 fire origins, drawn per environment.  Without this every
-    # environment in a batch is the same episode, the policy has one trajectory to
-    # memorise rather than a task to learn, and -- worse -- an untrained network with
-    # a constant action scores either 0% or 100% depending on which way it happens to
-    # point, which makes every baseline meaningless.
     n_routes: int = 40
     n_fire_origins: int = 4
     routes: list | None = None            # [[[sx, sy], [gx, gy]], ...]
@@ -102,7 +68,7 @@ class Scenario:
         return Clock(episode_seconds=self.episode_seconds)
 
     def terrain(self):
-        """The map, cached. Rebuilding a city per parameter change is unusable."""
+        """The map, cached."""
         key = (self.paper_map, self.place, self.lat, self.lon,
                self.radius_m, self.cell_size_m)
         if key not in _TERRAIN_CACHE:
@@ -132,12 +98,7 @@ class Scenario:
 
     @classmethod
     def preset(cls, name: str, **overrides) -> "Scenario":
-        """A named place, with anything explicitly passed taking precedence.
-
-        The preset's radius is a default rather than a fixture: training wants a
-        smaller extract than a demo does, and having to remember which presets
-        already set which fields is exactly the friction presets exist to remove.
-        """
+        """A named place; anything passed explicitly overrides the preset."""
         place, lat, lon, radius = PRESETS[name]
         fields = {"place": place, "lat": lat, "lon": lon, "radius_m": radius}
         if place is None:
@@ -146,32 +107,12 @@ class Scenario:
 
 
 def autoplace(sc: Scenario) -> Scenario:
-    """Fill in whatever was left unspecified, sensibly.
-
-    Only fields still `None` are touched, so anything a person picked -- by hand, or
-    by clicking a map -- survives untouched.  This is a convenience for getting a
-    runnable situation out of a half-filled form, and is emphatically not the
-    paper's setup: the paper hand-picks 40 origin/destination pairs around the
-    perimeter and four fire origins in the interior.  No result should depend on
-    what happens here.
-    """
+    """Fill in start, exit, fire and routes sensibly for this map, if not given."""
     t = sc.terrain()
     cell = t.cell_size_m
     walk = t.walkable.nonzero()
 
     if sc.human_start is None:
-        # Somewhere connected to the rest of the city.
-        #
-        # "Any walkable cell a quarter of the way in" is not good enough on a real
-        # extract: it lands in an enclosed courtyard, and then the longest walk
-        # available is seventeen metres.  The evacuee strolls to safety in thirteen
-        # seconds in every episode, the drones are irrelevant, and the whole task
-        # quietly evaporates -- which is exactly what happened, and took a while to
-        # notice because nothing failed.
-        #
-        # So: try a spread of candidates and keep the one that can actually reach the
-        # most of the map.  A handful of distance fields at setup time is nothing
-        # against training against a scenario that is not a scenario.
         w, h = t.shape
         best, best_reach = None, -1
         for fx in (0.25, 0.5, 0.75):
@@ -194,24 +135,13 @@ def autoplace(sc: Scenario) -> Scenario:
     from_start = nav.distance_field(t.walkable, start_cell[None], cell)[0]
 
     if sc.human_goal is None:
-        # As far as somebody could plausibly walk in the time available, measured
-        # along the streets rather than straight through the buildings.
-        # Most of what they could walk in the time, not half of it.  At 0.55 the
-        # evacuee strolls out with a minute to spare in every single episode, the
-        # drones are irrelevant to the outcome, and there is nothing to learn.
         budget = 0.88 * 1.3 * sc.episode_seconds
         reachable = t.walkable & (from_start < nav.UNREACHABLE / 2)
-        # Cap the ask at what the map can actually offer, so a small extract gives a
-        # short route rather than silently giving the nearest cell to an impossible one.
         want = min(budget, float(from_start[reachable].max()) * 0.95)
         goal_cell = reachable.nonzero()[(from_start[reachable] - want).abs().argmin()]
         sc.human_goal = [(goal_cell.float() * cell).tolist()] * len(sc.human_start)
 
     if sc.drone_start is None:
-        # A launch point, not the person's doorstep.  The paper puts the rescuers at a
-        # fixed base near the middle of the map while the evacuee starts on the
-        # perimeter; starting them on top of each other makes the task trivial and a
-        # policy that captures on the first step has learned nothing about searching.
         w, h = t.shape
         centre = torch.tensor([w * 0.5, h * 0.5])
         sc.drone_start = (walk[(walk.float() - centre).norm(dim=1).argmin()].float()
@@ -222,9 +152,6 @@ def autoplace(sc: Scenario) -> Scenario:
         from_goal = nav.distance_field(t.walkable, goal_cell[None], cell)[0]
         route = float(from_start[goal_cell[0], goal_cell[1]])
 
-        # On the route, clear of both ends, and somewhere with enough around it to
-        # burn. Lighting it beside the exit makes an incoherent scenario; lighting it
-        # on a lone verge ringed by road gives a fire that goes out in twenty seconds.
         density = torch.nn.functional.avg_pool2d(t.fuel[None, None], 15, 1, 7)[0, 0]
         heavy = t.fuel > 0.6
         on_route = (from_start + from_goal) < route * 1.35
@@ -244,22 +171,13 @@ def autoplace(sc: Scenario) -> Scenario:
     return sc
 
 
-# What the evacuee can actually walk, and how much of it a route should use.  Routes
-# at the full budget leave no slack for panic, smoke or a detour around fire; routes
-# at a fraction of it are over before the drones have done anything.
 WALK_MPS = 1.3
 ROUTE_FRACTION = 0.55
 REACH_MARGIN = 0.85
 
 
 def _variety(sc: Scenario, t, cell: float):
-    """A spread of origin/destination pairs and fire origins, as the paper has.
-
-    Origins and destinations are taken from around the edge of the reachable area
-    and paired across it, so every route crosses the map rather than clipping a
-    corner -- which is what the paper's forty pairs do, and why its evacuee "traverses
-    all regions of the map".
-    """
+    """`n_routes` start/exit pairs and `n_fire_origins` fire cells, as the paper's 40 and 4."""
     start = (torch.tensor(sc.human_start[0]) / cell).long()
     reach = nav.distance_field(t.walkable, start[None], cell)[0]
     ok = t.walkable & (reach < nav.UNREACHABLE / 2)
@@ -283,12 +201,6 @@ def _variety(sc: Scenario, t, cell: float):
     if len(rim) < 4:
         return None, None
 
-    # Paired by how long the walk actually takes, not by how far apart the two points
-    # look.  Pairing each rim point with the one opposite gave routes up to 217 m --
-    # further than a 1.3 m/s walker covers in a 60 s episode, so the evacuee reached
-    # safety in 6% of episodes and the rescuers were being scored on a deadline nobody
-    # could meet.  Distance here is geodesic: around buildings, which is the distance
-    # that matters and can be half again the straight line.
     rim_t = torch.stack(rim)
     fields = nav.distance_field(t.walkable, rim_t, cell)          # (rim, H, W)
     between = fields[:, rim_t[:, 0], rim_t[:, 1]]                 # (rim, rim)

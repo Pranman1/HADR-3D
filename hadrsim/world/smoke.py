@@ -1,28 +1,5 @@
-"""Smoke.
-
-Not decoration.  Smoke is what blocks the high drone's view, and that occlusion is
-the paper's whole premise -- the low rescuer sees under things the high rescuer
-cannot.  In the 2D simulator that asymmetry is asserted by a lookup table.  Here it
-has to come from a plume that is actually in the way.
-
-**Derived from the fire, never simulated independently.**  A parcel of smoke leaving
-a burning cell rises at roughly constant speed and is carried sideways by the wind,
-so by the time it reaches height `z` it has been aloft for `z / rise_speed` and has
-drifted `wind * that` downwind, spreading as it goes.  Which means the smoke at
-height `z` is the fire field, shifted downwind and blurred:
-
-        z = 30 m   . . . ~~~~~~~~~        far downwind, wide and thin
-        z = 20 m   . . ~~~~~~~
-        z = 10 m   . ~~~~~
-        z =  0 m   ###                    the burning cells themselves
-
-That is a steady-state plume in uniform wind.  It is not a fluid solver, and it does
-not need to be: what the drones care about is how much smoke sits between a camera
-and the ground, which this gets right for a few convolutions per layer.
-
-Vertical layers are coarse (5 m) because that is the scale over which occlusion
-changes.  The horizontal grid is the terrain's, because the fire is already on it.
-"""
+"""A layered smoke field rebuilt from the fire each tick: lofted by heat, pushed by wind,
+blurred as it spreads.  Thick smoke dims cameras and slows people."""
 
 from __future__ import annotations
 
@@ -48,7 +25,7 @@ class SmokeParams:
 
 
 class Smoke:
-    """A plume field over a batch of environments. Rebuilt from the fire each tick."""
+    """A plume field over a batch of environments."""
 
     def __init__(self, terrain, batch: int, params: SmokeParams | None = None, device=None):
         self.terrain = terrain
@@ -70,11 +47,7 @@ class Smoke:
         return self.density.sum(1)
 
     def optical_depth_down(self, from_alt_m: float) -> torch.Tensor:
-        """(B, W, H) how much smoke a camera at `from_alt_m` looks through, straight down.
-
-        The high drone's problem in one number: above a fresh plume this is large, and
-        drifting a hundred metres downwind is how it gets a clear view again.
-        """
+        """(B, W, H) smoke a camera at `from_alt_m` looks through straight down."""
         alt = self.layer_altitudes
         below = (alt <= from_alt_m).float()[None, :, None, None]
         return (self.density * below).sum(1) * self.p.extinction * self.p.layer_height_m
@@ -86,18 +59,7 @@ class Smoke:
     # ------------------------------------------------------------------- step
 
     def update(self, fire, wind: Wind) -> None:
-        """Rebuild the plume from the fire's current intensity.
-
-        Stateless on purpose: smoke has no memory of its own, so a fire that goes out
-        stops producing a column immediately rather than leaving a ghost behind.  Over
-        the seconds that matter for seeing through it, that is the right trade.
-        """
-        # Computed on a coarser grid than the terrain, then resampled.  A plume is
-        # diffuse -- it has no feature smaller than several metres -- so resolving it
-        # at the map's own resolution buys nothing and costs everything: the shift and
-        # blur run once per altitude layer, and at a thousand parallel environments
-        # they were two thirds of the entire step. Coarsening by four cuts that
-        # sixteenfold and changes the field by less than the model's own uncertainty.
+        """Rebuild the plume from the fire's current intensity."""
         c = max(1, int(self.p.coarsen))
         cell = self.terrain.cell_size_m * c
         source = F.avg_pool2d(fire.intensity[:, None], c, ceil_mode=True)
@@ -128,15 +90,8 @@ class Smoke:
 # ------------------------------------------------------------------ helpers
 
 def _translate(x: torch.Tensor, offset_cells: torch.Tensor) -> torch.Tensor:
-    """Shift a (B, 1, W, H) field by a per-environment, fractional number of cells.
-
-    Zero-filled at the edges: smoke that blows off the map is gone, not wrapped round
-    to the other side.
-    """
+    """Shift a (B, 1, W, H) field by a per-environment fractional number of cells."""
     b, _, w, h = x.shape
-    # grid_sample reads output positions *from* input positions, so moving content by
-    # +s means sampling at -s. Normalised coordinates run -1..1 across each axis, and
-    # its last axis is x, which is our second spatial one.
     tx = -2.0 * offset_cells[:, 1] / max(h - 1, 1)
     ty = -2.0 * offset_cells[:, 0] / max(w - 1, 1)
 
@@ -151,7 +106,7 @@ def _translate(x: torch.Tensor, offset_cells: torch.Tensor) -> torch.Tensor:
 
 
 def _blur(x: torch.Tensor, sigma_cells: float) -> torch.Tensor:
-    """Separable Gaussian blur. Conserves total mass, so spreading thins the plume."""
+    """Separable Gaussian blur."""
     if sigma_cells <= 0.05:
         return x
     radius = max(1, int(math.ceil(3.0 * sigma_cells)))

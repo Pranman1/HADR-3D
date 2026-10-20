@@ -1,23 +1,5 @@
-"""PPO with recurrence, which is what the paper used.
-
-Written directly against our batched environment rather than through a library.  The
-usual reason to reach for one is its collectors, and ours is already a batch of
-thousands of environments stepping together -- so the library would be wrapping a
-batch to hand it back as a batch.  Roughly two hundred lines buys transparency, no
-version pinning, and a training loop that can be read end to end.
-
-**Recurrent because the problem is.**  A drone that saw somebody two seconds ago and
-cannot see them now has to remember; a policy without memory would have to be told
-where they were, which is the oracle in a different hat.
-
-**One network flying both drones**, as in the paper.  Each drone's observation is
-encoded separately and only then concatenated, so splitting into two actors later is
-a change to where the halves go rather than to the contract.
-
-Note what is deliberately absent: no reward shaping beyond the named terms in
-`reward/`, no observation normalisation tricks that would have to be reproduced on
-real hardware, and no frame stacking, because the recurrence is doing that job.
-"""
+"""PPO with an LSTM, as in the paper: collect a rollout from the batched env, GAE, clipped
+updates replayed in sequence with recurrent state carried, entropy annealed."""
 
 from __future__ import annotations
 
@@ -61,9 +43,6 @@ class ActorCritic(nn.Module):
         self.actor = nn.Sequential(nn.Linear(hidden, 128), nn.ReLU(),
                                    nn.Linear(128, n_drones * spec.ACTION_DIM))
         self.critic = nn.Sequential(nn.Linear(hidden, 128), nn.ReLU(), nn.Linear(128, 1))
-        # A learned, state-independent spread. Simpler than predicting it per state and
-        # much less prone to collapsing early, which is the usual way a continuous
-        # policy stops exploring and never starts again.
         self.log_std = nn.Parameter(torch.full((n_drones * spec.ACTION_DIM,), -0.5))
 
     def features(self, obs: dict) -> torch.Tensor:
@@ -85,22 +64,12 @@ class ActorCritic(nn.Module):
             return mean.tanh(), None, value, state
         dist = torch.distributions.Normal(mean, std)
         raw = dist.rsample()
-        # tanh keeps the command inside the contract's [-1, 1] without the gradient
-        # pathologies of clipping, at the cost of the log-probability correction below.
         action = raw.tanh()
         logp = (dist.log_prob(raw) - torch.log1p(-action.pow(2) + 1e-6)).sum((-1, -2))
         return action, logp, value, state
 
     def evaluate(self, obs: dict, action: torch.Tensor, state=None):
-        """Score an action already taken. Hands the carried state back.
-
-        The state matters far more than it looks.  Evaluating each step from a
-        *fresh* recurrent state scores a different policy from the one that acted --
-        one with no memory of the episode so far -- so the importance ratio PPO is
-        built on compares two unrelated things, and every update is noise.  The
-        rollout has to be replayed in order, carrying state, which is why this
-        returns it.
-        """
+        """Log-probability, entropy and value of actions already taken; hands the carried state back."""
         mean, value, state = self(obs, state)
         std = self.log_std.exp().view(1, self.n_drones, spec.ACTION_DIM)
         dist = torch.distributions.Normal(mean, std)
@@ -170,28 +139,13 @@ class PPO:
     # ---------------------------------------------------------------- update
 
     def entropy_now(self, progress: float) -> float:
-        """The exploration bonus, annealed from `entropy` to `entropy_final`.
-
-        Held constant, it never stops paying a policy to stay uncertain, and the
-        spread it settles on is whatever balances that bonus against the advantage --
-        which here meant never settling at all: `log_std` moved by under two percent
-        in two million steps, in every run. A policy that cannot become confident is
-        a noisy controller that sometimes stumbles into the right answer, which is
-        exactly what the numbers showed: respectable with exploration on, near zero
-        with it off.
-        """
+        """Exploration bonus annealed linearly from `entropy` to `entropy_final` over the run."""
         cfg = self.cfg
         t = min(max(progress, 0.0), 1.0)
         return cfg.entropy + (cfg.entropy_final - cfg.entropy) * t
 
     def update(self, buf, adv, returns, start_state=None, progress: float = 0.0) -> dict:
-        """Replay the rollout in order, carrying recurrent state, and clip.
-
-        One backward pass over the whole sequence rather than one per timestep.  The
-        recurrent state ties the steps together, so they are not independent samples
-        and cannot be stepped on individually without severing the very connection
-        the LSTM exists to make.
-        """
+        """Replay the rollout in order, carrying recurrent state, for `epochs` clipped updates."""
         cfg = self.cfg
         actions = torch.stack(buf["action"])
         old_logp = torch.stack(buf["logp"])
@@ -213,8 +167,6 @@ class PPO:
                 value_loss = (value - returns[t]).pow(2).mean()
                 losses.append(policy_loss + cfg.value_coef * value_loss
                               - beta * entropy.mean())
-                # An episode boundary ends the memory. Carrying it across teaches the
-                # policy to remember something that never happened.
                 state = tuple(h * alive[t].view(1, -1, 1) for h in state)
 
             loss = torch.stack(losses).mean()
@@ -229,15 +181,7 @@ class PPO:
 
     def train(self, iterations: int, log_every: int = 5, on_log=None, wandb_run=None,
               start: int = 0, total: int | None = None) -> list:
-        """Train for `iterations` collect-update cycles.
-
-        `on_log(row)` is called every `log_every` iterations with the row printed;
-        `wandb_run` (a `wandb.init()` handle) receives every row, so a sweep agent
-        can drive this loop without the loop knowing about wandb.
-
-        `start` and `total` let a caller train in blocks -- evaluate, train more --
-        while the entropy anneal still runs over the *whole* run.  Without them each
-        block restarted the schedule from the top, which a smoke run made visible."""
+        """`iterations` collect-update cycles; `start`/`total` keep the anneal right when called in blocks."""
         history = []
         total = total or iterations
         for i in range(1, iterations + 1):
@@ -267,11 +211,7 @@ class PPO:
         return history
 
     def save(self, path: str) -> None:
-        """Weights plus a manifest saying what network they are.
-
-        Without the manifest a checkpoint had to be sniffed -- "does it have conv
-        layers?" -- which is how a flat-encoder parity result went unnoticed for a
-        week.  The manifest is what `policy.base.load` reads."""
+        """Weights plus a manifest (encoder, hidden size, contract version)."""
         torch.save({"net": self.net.state_dict(), "config": self.cfg.__dict__,
                     "manifest": self.net.manifest}, path)
 

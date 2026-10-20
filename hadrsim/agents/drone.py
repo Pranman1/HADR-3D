@@ -1,32 +1,6 @@
-"""How a drone moves.
-
-Three fidelity levels behind one interface.  The policy's command is identical at
-every level -- a velocity setpoint in the drone's own frame, plus a turn rate -- so
-the level can be changed between training and evaluation without retraining, which
-is the whole reason for arranging it this way.
-
-    kinematic    position moves at the commanded speed.  No physics at all; exists
-                 to reproduce the paper, whose drones teleport between cells.
-    point_mass   mass, drag, acceleration and turn-rate limits.  Captures inertia:
-                 it cannot stop or turn instantly.  The training default.
-    quadrotor    six degrees of freedom, four rotors, thrust and torque, motor lag,
-                 real attitude.  What a real machine does.
-
-**Written batched, not on a physics engine.**  Isaac Lab and MuJoCo exist to solve
-*contact* -- things bumping, gripping, resting on each other -- and our drones fly
-through open air and touch nothing.  Buying a contact solver costs a heavy
-dependency, VRAM the GPU needs for training, and the batching that makes thousands
-of parallel environments possible, in exchange for the one feature we never use.
-The equations below are standard and published (Mellinger & Kumar); what makes the
-aircraft a *particular* aircraft is the table in `airframes.py`.
-
-**The tilt matters here more than it usually does.**  A real quadrotor has to lean
-to accelerate, and the camera is bolted to the airframe, so where it looks depends
-on how it is moving.  This whole project is about what the drones can see, so
-`point_mass` derives a tilt from its commanded acceleration -- a real quadrotor's
-lean is essentially determined by acceleration anyway -- rather than flying
-permanently level, which no real drone does.
-"""
+"""A batch of drones at one of three fidelities: kinematic (the paper's teleporting drone),
+point_mass (inertia, drag, inferred tilt) or quadrotor (6-DOF rigid body under the autopilot).
+All take the same (B, 4) command: body-frame velocities and yaw rate in [-1, 1]."""
 
 from __future__ import annotations
 
@@ -37,9 +11,6 @@ from hadrsim.core import rotation as rot
 
 GRAVITY = 9.81
 
-# X configuration, seen from above, +x forward and +y left. Rotors 0 and 2 spin one
-# way and 1 and 3 the other, so their drag torques cancel in a hover and differ when
-# the aircraft is asked to turn.
 ROTOR_ANGLES = (0.25, 0.75, 1.25, 1.75)     # in units of pi
 ROTOR_SPIN = (1.0, -1.0, 1.0, -1.0)
 
@@ -70,21 +41,7 @@ class Drone:
 
     def confine(self, x_max: float, y_max: float,
                 alt_min: float = 2.0, alt_max: float = 120.0) -> None:
-        """A geofence: the box the aircraft is allowed to be in.
-
-        Real drones have all of this -- ground underneath, a regulatory ceiling
-        (120 m almost everywhere), and an operator-set boundary -- so it is missing
-        physics rather than a training convenience.
-
-        It also closes a degenerate solution the environment was otherwise offering:
-        with nothing stopping it, a policy learned to hold full vertical command and
-        fly one drone to 286 metres *underground* and the other to 332 metres up,
-        where neither can see anything and neither is scored on anything.  It is a
-        perfectly good answer to the question that was actually being asked.
-
-        Velocity into a limit is zeroed rather than kept, so an aircraft pinned to
-        the fence stops pressing on it instead of accumulating speed it can never use.
-        """
+        """Geofence: clamp into the map and the altitude band, zeroing velocity into a limit."""
         low = torch.tensor([0.0, 0.0, alt_min], device=self.device)
         high = torch.tensor([x_max, y_max, alt_max], device=self.device)
         clamped = torch.maximum(torch.minimum(self.pos, high), low)
@@ -130,18 +87,11 @@ class Drone:
     # ------------------------------------------------------------------- step
 
     def step(self, command: torch.Tensor, dt: float) -> None:
-        """Advance by `dt`. `command` is (B, 4) in [-1, 1].
-
-        Forward, lateral and vertical speed in the drone's own frame, plus turn rate.
-        Deliberately the native PX4 offboard setpoint, so what the policy emits in
-        simulation is what you would send a real aircraft.
-        """
+        """Advance by `dt`."""
         cmd = command.to(self.device).clamp(-1.0, 1.0)
         want_body = cmd[:, :3] * torch.tensor(
             [self.af.max_speed_mps, self.af.max_speed_mps, self.af.max_climb_mps],
             device=self.device)
-        # The airframe's speed limit is on the whole velocity, not on each axis: full
-        # forward *and* full left is not a licence to fly 1.4 times as fast.
         want_body = torch.cat(
             [_clamp_norm(want_body[:, :2], self.af.max_speed_mps), want_body[:, 2:]], -1)
         want_world = rot.rotate(rot.from_yaw(self.yaw), want_body)
@@ -156,19 +106,13 @@ class Drone:
             self._step_quadrotor(want_world, yaw_rate, dt)
 
     def _step_kinematic(self, want, yaw_rate, dt) -> None:
-        """No physics. The paper's drones, for reproducing the paper's numbers."""
+        """No physics."""
         self.vel = want
         self.pos = self.pos + want * dt
         self.quat = rot.from_yaw(self.yaw + yaw_rate * dt)
 
     def _step_point_mass(self, want, yaw_rate, dt) -> None:
-        """Inertia and drag, and a tilt inferred from what it is doing.
-
-        The lean is not decoration.  A real quadrotor accelerating forward is leaning
-        forward by roughly atan(a/g), and the camera leans with it; a permanently
-        level camera is the single most misleading thing a point-mass drone can do in
-        a project about what drones can see.
-        """
+        """Inertia, drag, and a tilt of atan(a/g) so the camera leans the way a real one does."""
         af = self.af
         drag = af.drag_coeff / af.mass_kg * self.vel * self.vel.norm(dim=-1, keepdim=True)
         accel = (want - self.vel) / 0.35 - drag
@@ -181,9 +125,6 @@ class Drone:
         yaw = self.yaw + yaw_rate * dt
         want_lean = rot.rotate_inv(rot.from_yaw(yaw), accel)
         g = torch.tensor(GRAVITY, device=self.device)
-        # Signs as `rotation` defines them, not as aerospace does: positive pitch
-        # leans the up-vector toward +x and positive roll leans it toward -y.  The
-        # autopilot had this backwards too, and it flew the aircraft in reverse.
         pitch = torch.atan2(want_lean[:, 0], g)
         roll = -torch.atan2(want_lean[:, 1], g)
         self.quat = rot.from_euler(roll, pitch, yaw)
@@ -193,8 +134,6 @@ class Drone:
         """Six degrees of freedom, driven by real rotors under a real autopilot."""
         target = self._autopilot.rotor_speeds(self, want, yaw_rate, dt)
 
-        # Motors do not change speed instantly, and the lag is a large part of why a
-        # quadrotor feels the way it does.
         alpha = 1.0 - torch.exp(torch.tensor(-dt / self.af.motor_tau_s, device=self.device))
         self.rotor = self.rotor + alpha * (target - self.rotor)
         self.rotor = self.rotor.clamp(0.0, self.af.max_rotor_rads)
@@ -208,9 +147,6 @@ class Drone:
         force[:, 2] -= self.af.mass_kg * GRAVITY
         force = force - self.af.drag_coeff * self.vel * self.vel.norm(dim=-1, keepdim=True)
 
-        # Roll and pitch come from thrust differences across the arms; yaw comes from
-        # the rotors' drag torques, which is why a quadrotor turns so much more slowly
-        # than it rolls.
         tau_x = (thrust * self.rotor_xy[:, 1]).sum(-1)
         tau_y = -(thrust * self.rotor_xy[:, 0]).sum(-1)
         tau_z = (thrust * self.spin).sum(-1) * self.af.moment_coeff

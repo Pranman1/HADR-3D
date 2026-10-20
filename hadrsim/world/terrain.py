@@ -1,52 +1,5 @@
-"""The city: what is solid, what you can walk through, and what will burn.
-
-Loads the paper's 2D map and gives it a third dimension.
-
-The 2D map has four building classes.  Read as a table of who can pass through and
-who can see inside, they describe something quite specific:
-
-    class              human walks   LLR flies   HLR sees in   LLR sees in
-    inaccessible            no           no           no            no
-    evader-only            yes           no           no            no
-    evader-accessible      yes           no           no           YES
-    accessible             yes          yes           no           YES
-
-Every class blocks the view from above, but two of them are transparent from the
-side.  That is not a building -- that is a *canopy*: a roof with open sides.  So in
-3D we get the paper's asymmetry for free, out of geometry rather than a lookup:
-
-    solid     ####   walls.  Blocks every sight line, from above and from the side.
-              ####
-              ####
-
-    canopy    ‾‾‾‾   a roof slab on posts, open at the sides.  The high drone looking
-              .  .   down hits the roof.  The low drone looking in from the side has
-                     a clear slanted line to the ground underneath.
-
-That is the whole premise of the paper -- "the low rescuer sees under occlusions the
-high rescuer cannot" -- made physical instead of stipulated.  Sideways visibility is
-therefore decided by *walls*, not by height: a canopy never blocks it.
-
-Height decides something else: whether the low drone fits underneath.  That is the
-only difference between `evader-accessible` (roof at 2.5 m -- a person fits, a drone
-at 3 m does not) and `accessible` (roof at 4 m -- the drone fits too).  So `flyable`
-is derived from clearance in load(), never hardcoded.
-
-**Buildings burn.**  Giving them zero fuel looks like the right way to stop
-`firegrid`'s fire walking through walls, and it is badly wrong: a building is the
-single largest thing on the block that is going to burn.  Downtown Berkeley is 44%
-building and most of the rest is pavement, so with fireproof buildings a fire there
-cannot spread at all -- which is not a quirk of the demo, it is the model saying a
-city cannot have a fire.
-
-What actually stops an urban fire is the *street*.  So streets carry no fuel and
-buildings carry more of it than open ground, and `firegrid`'s real defect -- that
-its fire ignores geometry entirely, because it has no notion of fuel at all --
-stays fixed.
-
-`burnable_buildings=False` restores the fireproof version for `paper_parity`, where
-the point is to reproduce the paper rather than to be right.
-"""
+"""The static map: solid heights, canopy slabs, walkable, flyable, fuel.  One per
+scenario, shared by every environment in the batch."""
 
 from __future__ import annotations
 
@@ -75,12 +28,7 @@ CLASSES = {
 
 @dataclass
 class Footprint:
-    """One building outline, in metres. Kept alongside the grid purely for drawing.
-
-    The simulation itself only ever reads the grid: occlusion, fire and movement are
-    all fields.  These polygons exist so a real city can be drawn as real buildings
-    rather than as a pile of one-metre cubes.
-    """
+    """One building outline in metres; kept for the rasteriser test and for drawing."""
 
     xy: "torch.Tensor"     # (N, 2) outline in metres, closed implicitly
     base_m: float
@@ -92,7 +40,7 @@ class Footprint:
 
 @dataclass
 class Terrain:
-    """Static map. Shared across every parallel simulation, so it carries no batch."""
+    """Static map."""
 
     solid_top: torch.Tensor    # (W, H) height of sight-blocking solid, 0 if none
     canopy_z0: torch.Tensor    # (W, H) underside of the roof slab, 0 if none
@@ -122,13 +70,7 @@ class Terrain:
         )
 
     def derive_flyable(self, llr_clearance_m: float = LLR_CLEARANCE_M) -> None:
-        """Recompute where the low drone may fly, from the geometry alone.
-
-        A wall stops it, and so does a roof it does not fit under.  Every loader
-        calls this, so clearance is never hand-written per map.  `walkable` stays
-        loader-specific: the paper's map has structures a person may enter and a
-        drone may not, which no amount of geometry will tell you.
-        """
+        """Where the low drone may fly: no solid, and any canopy higher than its clearance."""
         roof = torch.where(self.canopy_z1 > 0, self.canopy_z0, torch.inf)
         self.flyable = (self.solid_top == 0.0) & (roof > llr_clearance_m)
 

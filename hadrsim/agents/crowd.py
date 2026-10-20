@@ -1,26 +1,5 @@
-"""How a body actually moves.
-
-`human.py` decides where the person wants to go.  This turns that wish into motion,
-using the social force model (Helbing & Molnar 1995, whose follow-up in Nature 2000
-is specifically about fire evacuation -- which makes it about as well-aimed a
-citation as this project is going to find).
-
-Three forces, and with one evacuee only the first two are non-zero:
-
-    drive       accelerate toward the velocity you want, over a reaction time
-    walls       push away from anything solid, harder the closer you are
-    people      push apart from each other  (N > 1; the interface allows it)
-
-Why this instead of just stepping in the desired direction, which is what the 2D
-simulator does: a body has momentum.  It cannot reverse instantly, it swings wide
-around corners, and it slows into a turn.  Over a 0.5 s control interval that is the
-difference between a person who behaves like a person and one who behaves like a
-cursor -- and it decides whether a drone that saw them a second ago still finds them
-where it expected.
-
-Walls are handled by a distance-to-wall field computed once per map, so the repulsion
-is a lookup rather than a search over nearby geometry.
-"""
+"""Motion layer for people: social forces from walls and each other, and a hard stop at
+walls. Returns a velocity; the caller integrates position."""
 
 from __future__ import annotations
 
@@ -44,7 +23,7 @@ class CrowdParams:
 
 
 class Crowd:
-    """The motion layer. Static per map, so the wall field is built once."""
+    """The motion layer."""
 
     def __init__(self, terrain, params: CrowdParams | None = None, device=None):
         self.terrain = terrain
@@ -53,16 +32,10 @@ class Crowd:
         cell = terrain.cell_size_m
 
         self.clearance = nav.clearance(terrain.walkable, cell).to(self.device)
-        # Gradient of clearance points away from the nearest wall, which is exactly
-        # the direction the repulsion should act in.
         self.away = nav.flow(-self.clearance[None])[0]
 
     def step(self, pos, vel, desired, dt: float, others=None):
-        """One motion step. Returns the new velocity; the caller integrates position.
-
-        Kept as "return a velocity" rather than "move them" so the human owns its own
-        state and this file stays reusable by anything else that walks.
-        """
+        """One motion step."""
         cell = self.terrain.cell_size_m
         accel = (desired - vel) / max(self.p.reaction_time_s, 1e-6)
         accel = accel + self._wall_force(pos, cell)
@@ -83,7 +56,7 @@ class Crowd:
         return direction * strength[:, None]
 
     def _person_force(self, pos, others):
-        """Keep out of each other's way. Inert while there is only one evacuee."""
+        """Keep out of each other's way."""
         delta = pos[:, None, :] - others[None, :, :]
         dist = delta.norm(dim=-1, keepdim=True).clamp_min(1e-6)
         near = (dist < self.p.person_range_m).float()
@@ -91,23 +64,7 @@ class Crowd:
         return push.sum(dim=1)
 
     def _stop_at_walls(self, pos, vel, dt, cell):
-        """Last resort: never let a step end inside a building.
-
-        The repulsion above handles this nearly always, but "nearly" is not enough --
-        a person inside a wall breaks the distance field, the fire's fuel mask, and
-        every visibility check downstream.
-
-        **Slide, do not stop.**  Zeroing the whole velocity deadlocks: the desired
-        direction still points at the wall next tick, so the person presses into it
-        forever and never gets anywhere.  Dropping only the blocked component lets
-        them run along the wall and round the corner, which is also what a person
-        does.
-
-        **A person has width.**  Testing whether the cell under their centre is not
-        wall lets them clip building corners diagonally and thread gaps narrower than
-        their shoulders, which is exactly what it looks like.  Requiring clearance of
-        at least a body radius fixes both, and it is the same test either way.
-        """
+        """Never let a step end inside a building."""
         def walkable_at(p):
             w, h = self.terrain.walkable.shape
             c = (p / cell).long()

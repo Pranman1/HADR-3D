@@ -1,15 +1,5 @@
-"""Randomness, seeded and passed in.
-
-The 2D simulator's fire draws from the unseeded global numpy generator, so the same
-seed does not give the same fire and no run can be reproduced exactly.  That is a
-one-line mistake with expensive consequences, and this module exists so it cannot be
-repeated: nothing in `hadrsim` may call `torch.rand` or `np.random` directly.
-
-One generator serves the whole batch.  Per-environment streams would be tidier but
-buy nothing here -- what reproducibility needs is that the same seed, the same batch
-size and the same sequence of calls produce the same numbers, which a single seeded
-generator already gives.
-"""
+"""Seeded random streams, passed explicitly and forked by name, so a run reproduces
+regardless of how often any one consumer draws."""
 
 from __future__ import annotations
 
@@ -37,21 +27,11 @@ class Rng:
         return torch.randint(low, high, shape, generator=self._gen, device=self.device)
 
     def bernoulli(self, p: torch.Tensor) -> torch.Tensor:
-        """Coin flips with per-element probability. The fire's whole spread step."""
+        """Coin flips with per-element probability."""
         return torch.rand(p.shape, generator=self._gen, device=p.device) < p
 
     def fork(self, tag: str) -> "Rng":
-        """An independent stream, named.
-
-        Lets one subsystem's random draws stop perturbing another's: adding a gust of
-        wind should not silently change which cells the fire ignites.
-        """
-        # A *stable* hash of the tag.  Python's `hash(str)` is salted per process
-        # (PYTHONHASHSEED), so with it every forked stream -- fire, wind, routes,
-        # sensing -- differed from one run to the next while the top-level seed did
-        # not.  "The same seed gives the same run" held inside a process and failed
-        # across them, which is the one place it matters.  Found by the golden
-        # regression test, 20 Sep.
+        """An independent stream named by `tag` (hashed with crc32, so it is the same in every process)."""
         mixed = (self.seed * 0x9E3779B1 + zlib.crc32(tag.encode())) & 0x7FFFFFFF
         return Rng(mixed, self.device)
 

@@ -1,18 +1,7 @@
-"""Drawing an episode to a video file.
+"""Frames to mp4, and `hadrsim-watch`.
 
-The other sink streams to a live 3D viewer, which is the better tool for poking at a
-scene -- and which needs a server, two ports, a browser and a URL, all of which is a
-lot of apparatus between you and "did that look right".  This one is a function
-call: frames in, `.mp4` out, nothing running afterwards.
-
-Top-down, because the thing being watched is fundamentally a plan view.  Where the
-fire is, where the person is, and whether the two are about to meet all read better
-from above than from any perspective camera, and altitude is drawn rather than
-projected: buildings are shaded by height, smoke by column density.
-
-Deliberately *not* the training loop's business.  Rendering four thousand parallel
-environments would cost more than training them; this draws one.
-"""
+    hadrsim-watch checkpoints/x.pt -o rescue.mp4
+    hadrsim-watch last_sighting --city "Venice San Marco" --episodes 2"""
 
 from __future__ import annotations
 
@@ -39,12 +28,7 @@ C_SIGHT = np.array([70, 130, 190])   # the ground a camera is currently covering
 
 @dataclass
 class Recorder:
-    """Collects frames during a run, then writes them out.
-
-    Frames are kept as small uint8 images rather than as matplotlib figures: a
-    two-minute episode is a couple of thousand frames, and holding that many figures
-    open is how a rendering script runs a machine out of memory.
-    """
+    """Collects frames during a run, then writes them out."""
 
     terrain: object
     scale: int = 2                     # screen pixels per world cell
@@ -87,8 +71,6 @@ class Recorder:
                 img[alight] = C_FIRE_COOL + v * (C_FIRE_HOT - C_FIRE_COOL)
 
         if smoke is not None:
-            # Smoke veils what is underneath rather than replacing it, so you can see
-            # the fire glowing through the plume.
             col = smoke.column_density()[env].cpu().numpy().T
             alpha = np.clip(col / 2.5, 0, 0.82)[..., None]
             img = img * (1 - alpha) + C_SMOKE * alpha
@@ -124,7 +106,7 @@ class Recorder:
     # ---------------------------------------------------------------- writing
 
     def save(self, path: str, fps: int = 25) -> str:
-        """Write an mp4 (or a gif, by extension). Returns the path actually written."""
+        """Write an mp4 (or a gif, by extension)."""
         import imageio.v3 as iio
 
         if not self.frames:
@@ -173,12 +155,7 @@ def _cross(img: np.ndarray, cx: float, cy: float, r: int, colour) -> None:
 
 
 def main(argv=None) -> None:
-    """Fly a policy and write a video.  Deterministic by default: what the policy
-    believes, not what its exploration noise happened to do.
-
-        hadrsim-watch checkpoints/sweep_closeness.pt -o rescue.mp4
-        hadrsim-watch last_sighting --city "Venice San Marco" --episodes 2
-    """
+    """Fly a policy and write a video; deterministic unless --stochastic."""
     import argparse
 
     import torch

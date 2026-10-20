@@ -1,30 +1,5 @@
-"""THE CONTRACT.
-
-The one frozen description of what a drone can see and what a drone can do.
-
-This is the only thing the training environment and the running environment share.
-As long as both honour it, a network trained in the fast headless environment runs
-unchanged in the real-time ROS 2 one -- and later, on a real drone.
-
-Changing anything here is a deliberate, versioned act: bump SPEC_VERSION, and every
-saved checkpoint trained against the old version becomes unloadable on purpose.
-
-Two rules that live here rather than in any one environment:
-
-  1. Detections carry confidence and age.  The oracle detector just sets confidence
-     to 1.0 and age to 0.0.  That is what lets a realistic detector be swapped in
-     without a single change downstream.
-
-  2. Teammate state is a detection like any other -- it arrives through comms and
-     may be stale.  Perfect communication is a *setting*, never an assumption.
-
-And one rule the environments must enforce, stated here because this is where anyone
-looking for it will come:
-
-  3. The reward may only read what the policy reads.  If the reward looks up ground
-     truth on its own, degrading perception changes nothing, because the answer
-     still arrives through the reward channel.
-"""
+"""The observation contract: shapes and provenance of everything a drone is told.
+A policy trained against this runs on anything that fills it."""
 
 from __future__ import annotations
 
@@ -36,30 +11,12 @@ SPEC_VERSION = 1
 # ---------------------------------------------------------------------- provenance
 
 class Provenance(str, Enum):
-    """How a drone came by a piece of information. The honesty of the whole sim.
+    """How a drone came by a piece of information: prior map, observed, shared, or its own memory."""
 
-    It is easy to make human detection realistic and leave something else quietly
-    magic.  Fire is the one that nearly slipped through: ground-truth fire is
-    perfectly legitimate for deciding *where the person runs* -- that is just how a
-    simulator works -- but the moment a drone reads it, the policy is planning around
-    a fire map it never had to go and find.
-    """
-
-    PRIOR = "prior"
-    """Known before the mission started. A real team has building footprints; so do
-    we, from OpenStreetMap. Nothing to earn, and no dishonesty in having it."""
-
-    OBSERVED = "observed"
-    """Must be seen. Sensor range, field of view and line of sight all apply, and
-    what was seen goes stale. Never read from the simulator's own state."""
-
-    SHARED = "shared"
-    """Someone else saw it and told us. Arrives through `comms`, so it is coarse,
-    delayed, and may not arrive at all. How a real incident commander learns where a
-    fire is: other aircraft, ground crews, satellite."""
-
-    OWN = "own"
-    """The drone's own memory of its own actions. Free by definition."""
+    PRIOR = "prior"          # known before take-off: the map
+    OBSERVED = "observed"    # seen by this drone, subject to range, view and line of sight
+    SHARED = "shared"        # told by someone else; may be late or missing
+    OWN = "own"              # the drone's own memory of its actions
 
 
 RASTER_CHANNELS: tuple[tuple[str, Provenance], ...] = (
@@ -69,36 +26,19 @@ RASTER_CHANNELS: tuple[tuple[str, Provenance], ...] = (
     ("searched", Provenance.OWN),
 )
 
-# Fire and smoke are OBSERVED rather than needing a learned detector, and that is a
-# deliberate, defensible line rather than laziness.  A person at 60 m is 1.7 m of
-# low-contrast texture; a fire is a large, bright, hot thing with a plume above it.
-# "Reliably detected inside the sensor footprint, absent outside it" is a fair
-# description of reality for fire, where the identical claim about a person is not.
-#
-# Any code that fills these channels must therefore route through `sensing/`, never
-# read `world/fire.py` state directly.  That rule is what this table exists to make
-# checkable.
-
 
 # --------------------------------------------------------------------------- action
 
 ACTION_FIELDS = ("v_forward", "v_lateral", "v_up", "yaw_rate")
 ACTION_DIM = len(ACTION_FIELDS)
 
-# All four are in [-1, 1] and are scaled by the airframe's limits into a *velocity
-# setpoint in the drone's own frame*.  This is deliberately the native PX4 offboard
-# message, so the jump to real hardware needs no translation layer.
-
 
 # ----------------------------------------------------------------------- observation
 
 @dataclass(frozen=True)
 class ObsSpec:
-    """Shapes of one drone's observation. Frozen: same for every drone, every env."""
+    """Shapes of one drone's observation."""
 
-    # --- itself: pos(3) vel(3) yaw(1) alt_agl(1) pitch(1) roll(1)
-    # pitch and roll are in here because the camera is bolted to the airframe: a real
-    # quadrotor tilts to accelerate, so where it looks depends on how it is moving.
     self_dim: int = 10
 
     # --- detections: rel_pos(3) rel_vel(3) confidence(1) age_s(1), K fixed slots
@@ -108,9 +48,6 @@ class ObsSpec:
     # --- teammate: rel_pos(3) confidence(1) age_s(1). Arrives via comms, may be stale.
     teammate_dim: int = 5
 
-    # --- surroundings: a picture centred on the drone, always the same size, so map
-    # size never touches the network. See RASTER_CHANNELS for what each layer is and,
-    # more importantly, what the drone had to do to earn it.
     raster_channels: int = len(RASTER_CHANNELS)
     raster_size: int = 32
     raster_metres_per_cell: float = 2.0
@@ -142,9 +79,8 @@ class ObsSpec:
 DEFAULT_OBS = ObsSpec()
 
 
-
 def validate(obs: dict, spec: ObsSpec = DEFAULT_OBS, batch: int | None = None) -> None:
-    """Raise if `obs` does not match the contract. Cheap; call it in tests, not loops."""
+    """Raise if `obs` does not match the contract."""
     expected = spec.shapes
     missing = set(expected) - set(obs)
     extra = set(obs) - set(expected)

@@ -1,22 +1,6 @@
-"""A control panel for scenarios.
-
-    python -m hadrsim.gui
-
-Pick a city, set the wind, drop the fire and the people where you want them, press
-play, and watch it run.  The point is not the picture -- the video renderer already
-makes pictures -- it is being able to *change something and see what happens*
-without editing a file, which is how you find out whether a policy generalises.
-
-Two halves.  The map is static per scenario, so it is sent once as a PNG and drawn
-underneath.  Everything that moves is sent as JSON over a websocket, a few hundred
-bytes a frame, and drawn on top.  A live 3D streaming viewer is the wrong shape for
-this: it wants to own the window, and what is wanted here is a form beside a map.
-
-Two engines behind one socket.  Pick a policy and the scenario is stepped by
-`PolicyRunner`, which *is* the training environment at batch 1 -- so what you are
-watching is the world the policy was trained in, not a second implementation of it.
-Pick none and it is `Runner`, which has no drones but will carry a crowd.
-"""
+"""The control panel: `hadrsim-panel`, then http://localhost:8000.
+FastAPI serves the page; a websocket streams frames from a `Runner` (crowd, no drones)
+or a `PolicyRunner` (the gym at batch 1, flown by a policy)."""
 
 from __future__ import annotations
 
@@ -54,8 +38,7 @@ def script(name: str) -> FileResponse:
 
 @app.get("/policies")
 def policies() -> dict:
-    """Scripted baselines, then checkpoints on disk newest first (per-iteration
-    snapshots `*_i0025.pt` hidden -- they would bury the dropdown)."""
+    """Scripted baselines, then checkpoints on disk newest first; per-iteration snapshots hidden."""
     root = Path.cwd() / "checkpoints"
     found = sorted(root.glob("*.pt"), key=lambda f: -f.stat().st_mtime) if root.is_dir() else []
     found = [f for f in found if not re.search(r"_i\d{4}$", f.stem)]
@@ -66,9 +49,7 @@ def policies() -> dict:
 
 @app.get("/presets")
 def presets(radius_m: float = 100.0) -> dict:
-    """Cities, flagged by whether their map is cached at *this* radius (the cache is
-    keyed on the bounding box). An uncached city means an Overpass download, which can
-    take minutes and can get the host banned, so the dropdown says so up front."""
+    """Cities, flagged by whether their map is cached at this radius."""
     from hadrsim.world import osm
 
     cache = Path.cwd() / "maps" / "osm_cache"
@@ -150,8 +131,6 @@ async def live(ws: WebSocket) -> None:
                     await push()
 
             if playing and runner and not runner.done:
-                # Paced to the wall clock: advance, then wait out the simulated time
-                # at the chosen speed.  (A policy runner moves in whole 0.5 s decisions.)
                 t0 = time.monotonic()
                 before = runner.time
                 await asyncio.to_thread(runner.advance, 0.05 * speed)
@@ -183,8 +162,7 @@ def _lan_ip() -> str:
 
 
 def _free_port(start: int = 8000, tries: int = 12) -> int:
-    """The first port nothing is listening on. Bind before announcing: a panel left
-    running from yesterday holds 8000, and a banner printed before the bind lied."""
+    """The first free port from 8000; bind before announcing."""
     import socket
 
     for port in range(start, start + tries):

@@ -1,26 +1,5 @@
-"""What a policy is, and the ones that come for free.
-
-A policy is anything that turns an observation (the contract in `core/spec.py`)
-into a `(B, 2, 4)` action -- one velocity setpoint per drone -- and may carry state
-between decisions:
-
-    act(obs, state, deterministic) -> action, logp, value, state
-    reset() -> state
-
-Three scripted ones live here.  They exist because a table of methods needs
-baselines a reader can picture, and because "does the learned policy beat a
-lawnmower sweep?" is a question worth being able to answer in one line:
-
-    hover           holds position.  The floor everything is read against.
-    lawnmower       the high rescuer sweeps the block in stripes; the low one
-                    follows underneath it.  The classic search pattern.
-    last_sighting   fly toward wherever the team last saw the person.  The
-                    obvious hand-written competitor to the learned closing
-                    behaviour.
-
-`load(name_or_path)` returns any of them or a trained network from a checkpoint,
-so the panel, the evaluator and the sandbox never have to know which is which.
-"""
+"""What a policy is -- anything with `act(obs, state, deterministic)` -- plus the scripted
+baselines (hover, lawnmower, last_sighting) and `load()` for either kind."""
 
 from __future__ import annotations
 
@@ -64,13 +43,7 @@ class Hover(Scripted):
 
 
 class Lawnmower(Scripted):
-    """Stripes across the block, turning at the edges.
-
-    Reads only what the observation gives it: own position as a fraction of the
-    map (`self[0:2]`) and heading (`self[6]`, yaw over pi).  Commands are in the
-    body frame, so "forward" is wherever the airframe is pointing -- the sweep is
-    flown by yawing 180 degrees at each edge and stepping one stripe over.
-    """
+    """The high rescuer sweeps the block in stripes; the low one follows underneath."""
 
     name = "lawnmower"
 
@@ -101,12 +74,7 @@ class Lawnmower(Scripted):
 
 
 class LastSighting(Scripted):
-    """Fly toward the person's last known position; hold when there is none.
-
-    Detection slot 0 carries the freshest sighting, or the team's remembered one
-    with its staleness, as relative position over camera range in the world frame;
-    the body-frame command is that vector rotated by the drone's own heading.
-    """
+    """Fly toward the person's last known position; hold when there is none."""
 
     name = "last_sighting"
 
@@ -145,8 +113,6 @@ class Learned:
         blob = torch.load(path, map_location=device)
         m = blob.get("manifest")
         if m is None:
-            # Older checkpoints carry no manifest; the weights themselves say which
-            # encoder trained, and everything else is the default it had.
             m = {"encoder": "conv" if any(".conv." in k for k in blob["net"]) else "flat",
                  "hidden": blob.get("config", {}).get("hidden", 128), "n_drones": 2,
                  "spec_version": spec.SPEC_VERSION}

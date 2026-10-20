@@ -1,12 +1,8 @@
-"""Adding the terms up, with the working shown.
+"""Weighted sum of registered terms, with each term's contribution kept.
 
-    Composer()                        # configs/reward/paper.yaml, the default
-    Composer("my_reward.yaml")        # your table; a `terms:` line names a .py of @term functions
-    Composer({"capture": 1.0})        # any dict of term -> weight
-
-Every term's contribution is kept separately in `Reward.parts`: when a policy learns
-something strange, the first question is which term paid for it.
-"""
+    Composer()                   # configs/reward/paper.yaml, the default
+    Composer("my_reward.yaml")   # a `terms:` line names a .py of @term functions
+    Composer({"capture": 1.0})"""
 
 from __future__ import annotations
 
@@ -24,8 +20,7 @@ CONFIGS = Path(__file__).resolve().parents[1] / "configs" / "reward"
 
 
 def load_weights(name_or_path: str = "paper") -> dict[str, float]:
-    """A weight table by name (`configs/reward/<name>.yaml`) or by path.  A `terms:`
-    entry is a .py file next to the yaml whose `@term` functions get registered."""
+    """A weight table by name (`configs/reward/<name>.yaml`) or path; a `terms:` entry names a .py of @term functions to register."""
     p = Path(name_or_path)
     p = p if p.suffix == ".yaml" else CONFIGS / f"{name_or_path}.yaml"
     table = yaml.safe_load(p.read_text())

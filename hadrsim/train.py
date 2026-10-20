@@ -1,14 +1,10 @@
-"""Train a policy with the default learner (PPO + LSTM + a CNN over the hazard map).
+"""The shipped learner: PPO + LSTM + CNN.
 
     hadrsim-train                                  # Berkeley, full fidelity, 300 iterations
-    hadrsim-train --seeds 0 1 2 --curriculum       # three seeds, launch distance grows as it earns it
-    hadrsim-train --lr 1e-4 --wandb hadr-sim3d     # every hyperparameter is a flag; wandb optional
+    hadrsim-train --seeds 0 1 2 --reward experiments/city_reward.yaml --wandb hadr-sim3d
 
-Every `--eval-every` iterations the policy is scored deterministically on full
-episodes through the shared evaluator; the best checkpoint is kept, and the scripted
-baselines are printed beside the learned number so no run is read without them.
-To use a different learner, ignore this file: `Env.reset()` / `Env.step()` is the gym.
-"""
+Evaluates every `--eval-every` iterations through `eval.evaluate`, keeps the best
+checkpoint, prints the scripted floors beside the number."""
 
 from __future__ import annotations
 
@@ -34,7 +30,7 @@ def train(city="Downtown Berkeley", radius=100.0, seconds=120.0, launch=25.0,
           iters=300, seed=0, reward="paper", weights=None, ppo: PPOConfig | None = None,
           eval_every=25, eval_batch=256, curriculum=False, tag=None,
           out="checkpoints", device="cuda", wandb_run=None) -> dict:
-    """One training run. Returns {best, curve, floors, tag}; checkpoints land in `out`."""
+    """One training run."""
     torch.manual_seed(seed)
     sc = autoplace(Scenario.preset(city, radius_m=radius, cell_size_m=2.0,
                                    episode_seconds=seconds, wind_mps=0.0, seed=seed))
@@ -69,9 +65,6 @@ def train(city="Downtown Berkeley", radius=100.0, seconds=120.0, launch=25.0,
         if wandb_run:
             wandb_run.log({"eval/capture": det, "eval/capture_stochastic": sto,
                            "eval/best": best, "eval/launch_m": launch}, step=i)
-        # The curriculum: launch further out once the policy is good at this range,
-        # judged on full episodes -- the in-run rollout flag reads far below the
-        # real rate and a threshold set against it was never reached.
         if curriculum and det > CURRICULUM["promote_at"] and launch < CURRICULUM["max_m"]:
             launch += CURRICULUM["step_m"]
             env.launch_offset_m = judge.launch_offset_m = launch

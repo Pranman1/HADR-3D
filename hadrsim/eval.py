@@ -1,20 +1,7 @@
-"""Scoring a policy: the one evaluation loop, and the command that runs it everywhere.
+"""The one evaluation loop, and `hadrsim-eval`.
 
-    hadrsim-eval checkpoints/sweep_closeness.pt            # every cached city, each against its own floor
-    hadrsim-eval last_sighting --city "Manhattan Midtown"  # one city, a scripted baseline
-
-Four copies of this loop had grown in `sandbox/` -- one per experiment -- and they
-had started to disagree about what they counted (whether a capture after the
-episode ended counts, whether "seen" means ever or right now).  A result that
-depends on which script scored it is not a result.  This is the loop; everything
-that reports a number calls it.
-
-    m = evaluate(env, policy)          # deterministic, full episodes
-    print(m.line("closeness, seed 0"))
-
-`policy` is anything with `act(obs, state, deterministic) -> (action, _, _, state)`
--- a trained network, a scripted baseline from `policy.base`, or `None`, which
-means the drones hold still and gives the floor every other number is read against.
+    hadrsim-eval checkpoints/x.pt                         # every cached city, each against its own floor
+    hadrsim-eval last_sighting --city "Manhattan Midtown"
 """
 
 from __future__ import annotations
@@ -26,7 +13,7 @@ import torch
 
 @dataclass
 class Metrics:
-    """What one batch of full episodes came to. Percentages, 0-100."""
+    """What one batch of full episodes came to."""
 
     episodes: int
     capture: float            # low rescuer reached the evacuee
@@ -39,7 +26,7 @@ class Metrics:
     parts: dict = field(default_factory=dict)   # summed reward, per term
 
     def line(self, tag: str) -> str:
-        """One printed row, the shape every sandbox script used to hand-roll."""
+        """One printed row."""
         return (f"  {tag:<28} capture {self.capture:5.1f}%   seen {self.seen:5.1f}%"
                 f"   reached {self.reached:5.1f}%   harmed {self.harmed:5.1f}%"
                 f"   t-capture {self.time_to_capture_s:5.1f} s")
@@ -85,8 +72,7 @@ def evaluate(env, policy=None, deterministic: bool = True, reset: bool = True) -
 
 
 def main(argv=None) -> None:
-    """Score a policy on one city or on every cached one, each against its own floor.
-    Cities are not equally hard, so the number that means anything is the gain."""
+    """Score a policy on one city or every cached one, each against its own floor."""
     import argparse
     import pathlib
 

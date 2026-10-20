@@ -1,41 +1,6 @@
-"""Spotting people.
-
-The seam the whole project turns on.  The 2D simulator's detection is a membership
-test -- `OBJECT_TO_IDX["evader"] in fov` -- and when it passes, the agent is handed
-the person's exact integer pose.  Inside the window: perfect truth.  Outside:
-nothing.  No falloff with range, no partial confidence, no misses, no false alarms.
-A camera at sixty metres does not behave like that, and a policy trained against one
-that does has never had to handle uncertainty.
-
-Three detectors, one signature, so swapping them is a scenario edit:
-
-    oracle       exact pose whenever geometry allows.  Parity with the paper, and the
-                 source of ground-truth labels for training the learned one.
-    geometric    field of view and line of sight, then: detection probability falling
-                 with range and smoke, position error growing with range, false
-                 alarms from clutter, and confidence reported honestly.
-    pixel        a small CNN over a rendered camera image (`sensing/pixel.py`).  Same
-                 output type; the place a real detector plugs in.
-
-**Everything returns the same `Detections`**, carrying confidence and age.  The
-oracle simply reports confidence one and age zero.  That is what turns "make
-perception realistic" from a rewrite into a line of config -- and it is why the
-fields exist from the very first commit rather than being added when they are
-needed.
-
-Range comes from two cues that a real detector gets for free once it has a box
-around someone, and they are worth naming because their *disagreement* is the
-confidence signal:
-
-  - **box height**: known human height over apparent height.  Always available, and
-    badly wrong when the legs are hidden, which reports the person as further away.
-  - **where the feet meet the ground**: with the camera pose known, the ray through
-    the feet pixel meets the ground plane at exactly one point.  More accurate, and
-    only available when the feet are visible.
-
-Agreeing means a clean sighting; disagreeing means the person is probably half
-hidden, so confidence drops and the policy can decide to go and look properly.
-"""
+"""Detectors: same inputs, same `Detections` out, so they swap by name.
+oracle = exact pose when geometry allows; geometric = oracle plus misses, range error
+and false alarms; pixel = a CNN over the rendered image (`pixel.py`)."""
 
 from __future__ import annotations
 
@@ -52,7 +17,7 @@ HUMAN_HEIGHT_M = 1.7
 
 @dataclass
 class Detections:
-    """What one camera reports this instant. All (B, N, ...) over N slots."""
+    """What one camera reports this instant."""
 
     position: torch.Tensor      # (B, N, 3) world, as believed -- not as true
     velocity: torch.Tensor      # (B, N, 3)
@@ -69,13 +34,7 @@ class Detections:
 
 
 class OracleDetector:
-    """Exact pose whenever the geometry allows it. The paper's detector.
-
-    Still honours field of view and line of sight -- what it does not do is make the
-    drone earn the *measurement*.  Keeping the geometry means switching to the
-    geometric detector changes only the noise, not the visibility, so the difference
-    between them is attributable.
-    """
+    """Exact pose whenever cone and line of sight allow. The paper's detector."""
 
     name = "oracle"
 
@@ -108,14 +67,7 @@ class OracleDetector:
 
 
 class GeometricDetector(OracleDetector):
-    """A camera that can be wrong, in the ways a camera is wrong.
-
-    Not a learned model -- it is a noise model driven by geometry, which is itself an
-    assumption.  Real detectors fail in ways correlated with the scene: someone in
-    shadow, against clutter, half behind a car.  The plan's answer is to *fit* these
-    numbers to a measured detector at step 5 rather than to keep guessing them, and
-    until then this is a considered guess and should be described as one.
-    """
+    """The oracle plus a noise model: misses rising with range and smoke, range-scaled position error, false alarms."""
 
     name = "geometric"
 
@@ -141,16 +93,12 @@ class GeometricDetector(OracleDetector):
             _, clarity = occlusion.visible(terrain, drone.pos, targets, smoke, env)
         seen = seen & (clarity > 0)
 
-        # How many pixels tall a person is, which is what both range cues rest on.
-        # Detection falls away as that shrinks, and as smoke eats the contrast.
         apparent = HUMAN_HEIGHT_M / distance.clamp_min(1.0)
         edge = 1.0 - (offset / self.camera.half_angle).clamp(0, 1) ** 4
         quality = (apparent / (HUMAN_HEIGHT_M / 8.0)).clamp(0, 1) * clarity * edge
 
         detected = seen & (rng.uniform(*quality.shape) > self.miss_rate + (1 - quality) * 0.9)
 
-        # Position error grows with range because it is an angular measurement: the
-        # same pixel of error is a bigger mistake further away.
         sigma = self.position_error_m * distance
         noisy = targets + rng.normal(*targets.shape) * sigma[..., None]
 
@@ -176,12 +124,7 @@ class GeometricDetector(OracleDetector):
         return det
 
     def _add_false_alarms(self, det: Detections, drone, rng: Rng) -> None:
-        """Clutter that looks like a person, in an otherwise empty slot.
-
-        A detector that only ever misses teaches a policy that any sighting is real.
-        Somewhere to walk toward that turns out to be a bin bag is a different and
-        more interesting problem, and it is one real detectors create constantly.
-        """
+        """A spurious detection in an empty slot, somewhere along the camera axis."""
         batch, slots = det.confidence.shape
         empty = det.confidence <= 0
         fire = rng.uniform(batch, slots) < self.false_alarm_rate

@@ -1,29 +1,6 @@
-"""The environment: thousands of cities burning at once, stepped together.
-
-This is the gym -- `reset()` and `step(actions)` -- and it contains no learning.
-
-Everything so far has been one world at a time.  This is where the batch dimension
-finally earns itself -- the whole point of writing world, agents and sensing over
-`(B, ...)` tensors was so that this file could be thin.
-
-The loop, per policy decision:
-
-    observe   ->  what each drone can see, through comms
-    act       ->  the policy commands a velocity
-    fly       ->  50 physics substeps at 100 Hz, and the person walks
-    score     ->  reward terms over what the team *believed*, never over truth
-    reset     ->  environments that finished, in place
-
-**No graphics, no ROS, no python loop over environments.**  A function that only
-handles one simulation is a hidden slow loop waiting to happen.  The panel drives
-this same class at batch 1, so there is exactly one physics.
-
-**Beliefs, not truth.**  Observations and rewards are both assembled from
-`Detections`.  The 2D simulator's rewards read ground-truth visibility on their own,
-which means degrading perception changes nothing -- the answer still arrives through
-the reward channel.  Closing that is most of why this project exists, so it is
-closed here by construction: the world's true state is never passed to the scorer.
-"""
+"""The gym: a batch of episodes in one city, stepped together on one device.
+`reset()` and `step(actions)`; no learning here.  One step is one policy decision
+(0.5 s): 50 physics ticks, then smoke, detections, belief, observation, reward."""
 
 from __future__ import annotations
 
@@ -54,11 +31,6 @@ HLR, LLR = 0, 1
 class Env:
     """A batch of independent episodes sharing one city."""
 
-    # An altitude band per role, because the roles *are* altitude bands.  The high
-    # rescuer is high and sees wide; the low one is low and sees under things.  One
-    # shared ceiling let the low rescuer climb to 120 m and sit there: its ground
-    # footprint grows with height, `coverage` pays for footprint, and farming that
-    # beat doing its actual job.  It is also simply what the paper describes.
     ALT_BANDS = ((25.0, 120.0),      # HLR: high, wide, cannot intercept
                  (2.0, 15.0))        # LLR: low, narrow, the only one that can
     ALT_MAX = 120.0                  # normalises altitude in the observation
@@ -67,9 +39,6 @@ class Env:
                  fidelity: str = "point_mass", weights: dict | str | None = None,
                  cameras=None, start_alt=None, capture_radius: float | None = None,
                  airframe=None, device="cpu"):
-        """`cameras`, `start_alt`, `capture_radius` and `airframe` exist so a scenario
-        can be built at the paper's scale -- a 25 m block, narrow sensors, teleporting
-        drones -- without any of that leaking into the defaults."""
         from hadrsim.scenario import autoplace
 
         self.scenario = autoplace(scenario)
@@ -103,7 +72,7 @@ class Env:
     # ------------------------------------------------------------------ setup
 
     def reset(self, mask: torch.Tensor | None = None) -> dict:
-        """Start over. `mask` restarts only the environments that finished."""
+        """Start every episode over, or only those in `mask`. Returns the first observation."""
         sc = self.scenario
         if mask is None:
             self.rng = Rng(sc.seed, self.device)
@@ -121,9 +90,6 @@ class Env:
         start, goal, ignite = self._draw_episodes()
         self.goal, self.start = goal, start
 
-        # Whole-batch resets only, for now: the fire and the person both carry state
-        # that would need per-environment surgery, and the policy is trained on fixed
-        # -length episodes where everything finishes together anyway.
         self.fire.reset((ignite / self.cell).long(), radius_m=sc.fire_radius_m)
         self.human.reset(start, goal)
         self.smoke.update(self.fire, self.wind)
@@ -138,12 +104,6 @@ class Env:
         self._first_seen = torch.full((self.batch,), -1.0, device=self.device)
         self._last_pos = torch.zeros(self.batch, 3, device=self.device)
         self._last_age = torch.full((self.batch,), 1e3, device=self.device)
-        # Environments whose episode is still running.  The batch resets together --
-        # the fire and the person carry state that would need per-environment surgery
-        # -- so an episode that ends at step 73 of 100 keeps being stepped for another
-        # 27, and every one of those steps was being paid and trained on.  Measured on
-        # the paper grid: *every* episode ends early, a quarter of all training steps
-        # happened after the episode they belong to was over.
         self.active = torch.ones(self.batch, dtype=torch.bool, device=self.device)
         self._was_reached = torch.zeros(self.batch, dtype=torch.bool, device=self.device)
         self._was_harmed = torch.zeros(self.batch, dtype=torch.bool, device=self.device)
@@ -153,11 +113,6 @@ class Env:
     def _draw_episodes(self):
         """A route and a fire origin per environment: (start, goal, ignite), metres."""
         sc = self.scenario
-        # A different route and a different fire per environment, drawn from the
-        # scenario's spread.  With one of each, every environment in the batch is the
-        # same episode: the policy memorises a trajectory instead of learning a task,
-        # and an untrained network scores 0% or 100% purely on which way its constant
-        # action happens to point.
         if sc.routes:
             pick = self.rng_route.integers(0, len(sc.routes), self.batch)
             routes = torch.tensor(sc.routes, device=self.device, dtype=torch.float32)
@@ -179,16 +134,6 @@ class Env:
         if self.launch_offset_m is None:
             base = torch.tensor(sc.drone_start, device=self.device).expand(self.batch, 2)
         else:
-            # The curriculum: launch a fixed distance from the person, so every
-            # environment poses the same difficulty whichever route it drew.
-            #
-            # On a random bearing, and that detail is the whole baseline.  Launching
-            # back along the route sounds right, but the routes start at the rim, so
-            # that bearing points off the map; falling back to the reverse parked the
-            # rescuer directly on the walk to safety, where a drone that never moved
-            # captured 45% of evacuees.  A policy cannot be credited for learning what
-            # hovering already does.  A random bearing puts it off the path, so
-            # closing the distance has to be flown.
             w_m, h_m = self.terrain.extent_m
             margin = 5.0
             theta = self.rng_route.uniform(8, self.batch, high=2 * math.pi)
@@ -197,8 +142,6 @@ class Env:
             on_map = ((cand[..., 0] > margin) & (cand[..., 0] < w_m - margin)
                       & (cand[..., 1] > margin) & (cand[..., 1] < h_m - margin))
             on_map &= self._roof_at(cand.clamp(0, max(w_m, h_m))) == 0      # and not inside a building
-            # The first bearing that lands on the map; if none does, the last one,
-            # clamped -- which only happens for a start hard against a corner.
             first = torch.where(on_map.any(0), on_map.float().argmax(0),
                                 torch.full_like(on_map[0], 7, dtype=torch.long))
             base = cand[first, torch.arange(self.batch, device=self.device)]
@@ -222,25 +165,13 @@ class Env:
                 for d, drone in zip(self.detectors, self.drones)]
 
     def _belief(self, detections):
-        """One team view, assembled from whoever saw anything.
-
-        Whichever drone is most confident wins.  This is the simplest possible fusion
-        and stands in for the comms layer, which is where it belongs once messages can
-        be late or lost.
-        """
+        """One team belief: the most confident detection, and the last sighting with its age."""
         conf = torch.stack([d.confidence[:, 0] for d in detections], -1)   # (B, D)
         pos = torch.stack([d.position[:, 0] for d in detections], 1)        # (B, D, 3)
         best = conf.argmax(-1)
         rows = torch.arange(self.batch, device=self.device)
         fresh, strength = pos[rows, best], conf.max(-1).values
 
-        # Remember the last sighting, and how long ago it was.
-        #
-        # The contract has carried an `age` on every detection since the first commit
-        # and nothing ever filled it in, so a policy that lost sight of somebody was
-        # told only "nothing here" -- indistinguishable from never having seen them.
-        # A searcher's most valuable piece of information is where the person was ten
-        # seconds ago, and it was being discarded every step.
         seen = strength > 0
         self._last_pos = torch.where(seen[:, None], fresh, self._last_pos)
         self._last_age = torch.where(seen, torch.zeros_like(self._last_age),
@@ -248,22 +179,7 @@ class Env:
         return fresh, strength, conf > 0
 
     def observe(self) -> dict:
-        """The contract, per drone, in units a network can use. See `core/spec.py`.
-
-        **Everything is scaled into roughly [-1, 1].**  Raw values span metres of map
-        (0-300), altitudes (2-120), speeds and angles all at once, fed to a freshly
-        initialised MLP -- and the few dozen numbers that matter, the detection slots,
-        are lost among four thousand that do not.  The policy's exploration spread
-        never shrank by so much as a percent in two million steps, in every run, on
-        both problems: it was never getting a signal clear enough to become confident
-        about anything.
-
-        Scaled by *known constants* rather than running statistics, deliberately.  A
-        real aircraft knows its own speed limit, its ceiling and the size of its
-        search area; it does not know the mean and variance of a training
-        distribution it was never part of.  Fixed scales are one less thing that has
-        to be reproduced on hardware.
-        """
+        """The observation per drone, scaled by fixed physical constants into roughly [-1, 1]. See `core/spec.py`."""
         detections = self._detect()
         believed, confidence, seen_by = self._belief(detections)
         self._last = (detections, believed, confidence, seen_by)
@@ -289,8 +205,6 @@ class Env:
             d = detections[i]
             rel = d.position - drone.pos[:, None, :]
             age = d.age_s.clone()
-            # When nobody has eyes on right now, slot zero carries the team's memory:
-            # where they were, and how stale that is.
             stale = (d.confidence[:, 0] <= 0) & (self._last_age < 30.0)
             rel[:, 0] = torch.where(stale[:, None], self._last_pos - drone.pos, rel[:, 0])
             age[:, 0] = torch.where(stale, self._last_age, age[:, 0])
@@ -316,18 +230,7 @@ class Env:
                 "believed": believed, "confidence": confidence, "seen_by": seen_by}
 
     def _sweep(self) -> None:
-        """Mark the ground the drones can currently see as searched.
-
-        Accumulated and slowly forgotten, rather than a snapshot of the current
-        footprint.  The contract calls this channel "where it has already looked" and
-        gives it provenance OWN -- the drone's own memory -- so a snapshot is not what
-        it says it is.  It is also the only thing in the observation that can tell a
-        policy where *not* to bother going.
-
-        Forgetting matters as much as remembering: without decay a policy sweeps the
-        map once, marks everything, and then has no reason ever to look again -- while
-        the person it is hunting has walked somewhere it checked two minutes ago.
-        """
+        """Mark the ground under each camera as searched; the map fades at 0.5 % a decision."""
         decay = 0.995
         self.searched = self.searched * decay
         before = self.searched.sum(dim=(1, 2))
@@ -348,13 +251,7 @@ class Env:
         self._new_area = (self.searched.sum(dim=(1, 2)) - before).clamp_min(0) / (w * h)
 
     def _raster(self, drone) -> torch.Tensor:
-        """The small picture centred on the drone.
-
-        Buildings are prior knowledge -- a real team has a map, and so do we, from
-        OpenStreetMap.  Fire and smoke are *observed*: masked to what the drone can
-        actually see from where it is, because handing a policy a perfect fire map is
-        the same oracle hole as handing it the person's position.
-        """
+        """The 32x32 hazard map around each drone: buildings, fire and smoke where looked at, searched."""
         s = self.obs_spec
         size, mpc = s.raster_size, s.raster_metres_per_cell
         half = size // 2
@@ -373,9 +270,6 @@ class Env:
         fire = self.fire.intensity[rows, gx[:, :, None], gy[:, None, :]]
         smoke = self.smoke.column_density()[rows, gx[:, :, None], gy[:, None, :]] / 3.0
 
-        # Fire and smoke are masked to what has actually been looked at. Handing a
-        # policy a perfect hazard map is the same oracle hole as handing it the
-        # person's position.
         looked = self.searched[rows, gx[:, :, None], gy[:, None, :]]
         return torch.stack([buildings, fire * looked, smoke * looked, looked], 1)
 
@@ -385,18 +279,14 @@ class Env:
     # ------------------------------------------------------------------- step
 
     def step(self, actions: torch.Tensor):
-        """One policy decision. `actions` is (B, 2, 4). Returns obs, reward, done, info."""
+        """One policy decision."""
         running = self.active.clone()
-        # A finished environment stops flying as well as stops being paid; otherwise
-        # its drones wander on and the observations they feed the recurrent state are
-        # from an episode that no longer exists.
         actions = actions * running[:, None, None].float()
         reach = self._fly(actions)
         return self._settle(actions, reach, running)
 
     def _fly(self, actions: torch.Tensor) -> torch.Tensor:
-        """Half a second of physics: 50 ticks of drones, person, wind and fire.
-        Returns which environments' low rescuer came within capture range."""
+        """Half a second of physics: 50 ticks of drones, person, wind and fire."""
         dt = self.clock.dt
         w_m, h_m = self.terrain.extent_m
         llr_drone = self.drones[LLR]
@@ -414,11 +304,6 @@ class Env:
             self.wind.step(dt, self.rng_wind)
             self.fire.step(dt, self.wind, self.rng_fire)
 
-            # Checked every substep, not once per decision.  The low rescuer travels
-            # six metres between decisions at full speed against a three metre
-            # capture radius, so sampling at the control rate lets it fly straight
-            # through somebody and register nothing -- which looks exactly like a
-            # policy that cannot close, and is not.
             reach |= ((llr_drone.pos[:, :2] - self.human.pos).norm(dim=-1)
                       < self.capture_radius)
         return reach
@@ -431,9 +316,7 @@ class Env:
         return self.terrain.solid_top[cx, cy]
 
     def _collide(self, drone, before: torch.Tensor) -> None:
-        """Buildings are solid.  A move into a wall is refused and the speed into it
-        lost; a descent onto a roof stops on the roof.  Tested every physics tick,
-        like capture, so a drone cannot cross a wall between two checks."""
+        """Buildings are solid: a move into a wall is refused and its speed lost; a descent onto a roof stops there."""
         hit = self._roof_at(drone.pos[:, :2]) > drone.pos[:, 2]
         if not bool(hit.any()):
             return
@@ -445,44 +328,19 @@ class Env:
         drone.vel[:, 2] = torch.where(on_roof, torch.zeros_like(drone.vel[:, 2]), drone.vel[:, 2])
 
     def _settle(self, actions, reach, running):
-        """Everything that happens once per decision after the flight: smoke, the
-        person's next intention, captures, observation, reward, episode ends."""
+        """After the flight: smoke, the person's next plan, captures, observation, reward, episode ends."""
         llr_drone = self.drones[LLR]
         self.smoke.update(self.fire, self.wind)
-        # Computed once and shared. "How near is the fire" was being worked out three
-        # times a step -- once for the person's panic and once per drone for the
-        # reward -- over the whole map each time.
         self._fire_near = nav.proximity(self.fire.intensity, 12.0, self.cell)
-        # `searched` and `_first_seen` accumulate across the episode and are reset in
-        # `reset()`.  Three lines re-initialising them *here* -- leftovers from that
-        # function -- quietly turned both of their reward terms inside out: `coverage`
-        # pays for ground newly looked at, so a wiped map made the whole footprint new
-        # again every step and a stationary hover collected it forever; `first_sight`
-        # pays once for finding somebody, and became 20 a step for staring at them.
-        # Against 200 for a capture, over a 240-step episode, watching was worth more
-        # than twenty rescues.  The policy was not failing to learn -- it had learned
-        # exactly what it was paid for, which is why every city run ended at "person
-        # seen 100%, captured 0%".
         self._want = self.human.desired_velocity(
             self.fire, self.smoke, self.rng_human, self.clock.control_dt)
         self._want = self._want * running[:, None].float()
         self.human.expose_to(self.fire)
         self._sweep()
 
-        # Capture is the low rescuer's job alone -- the high one cannot intercept,
-        # which is the asymmetry the whole paper is about.
-        #
-        # Only while the episode is actually running.  A finished environment keeps
-        # being stepped until the batch resets together, and its evacuee kept walking
-        # -- occasionally straight into a parked rescuer, registering a capture for an
-        # episode that was already over.  Measured: 3 of 13 recorded captures.  The
-        # reward was already masked, so this never misled the *policy*, only the
-        # metric everything is reported in.
         reach &= running
         newly = reach & ~self.captured
         self.captured |= reach
-        # Edges, not levels.  `reached` and `harmed` latch and stay true, so a term
-        # reading them directly is paid again on every remaining step of the episode.
         newly_reached = self.human.reached & ~self._was_reached
         newly_harmed = self.human.harmed & ~self._was_harmed
         self._was_reached = self.human.reached.clone()

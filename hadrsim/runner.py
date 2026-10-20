@@ -1,13 +1,6 @@
-"""Running a scenario, one step at a time.
-
-Two runners behind one interface (`reset`, `step`, `advance(seconds)`, `snapshot`,
-`time`, `done`):
-
-- `Runner` steps fire, smoke, wind and a crowd of people itself.  No drones.
-- `PolicyRunner` wraps `Env` at batch 1 and flies a policy in it.  One person, two
-  drones, exactly the physics the policy trained in -- a viewer that stepped the world
-  even slightly differently would be showing a world nobody trained in.
-"""
+"""Two runners behind one interface (`reset`, `step`, `advance(seconds)`, `snapshot`, `time`,
+`done`): `Runner` steps fire, smoke, wind and a crowd with no drones; `PolicyRunner`
+wraps `Env` at batch 1 and flies a policy in it."""
 
 from __future__ import annotations
 
@@ -28,7 +21,7 @@ from hadrsim.world import wind as wind_mod
 
 @dataclass
 class Snapshot:
-    """What a watcher needs. Plain python, so it serialises straight to JSON."""
+    """What a watcher needs."""
 
     t: float
     burning: int
@@ -61,8 +54,6 @@ class Runner:
         sc = self.scenario
         n = max(1, sc.n_humans)
 
-        # A stream each. Sharing one makes the fire's spread depend on how often the
-        # wind was stepped, which turns "reproducible" into a claim rather than a fact.
         base = Rng(sc.seed)
         self.rng_fire = base.fork("fire")
         self.rng_wind = base.fork("wind")
@@ -96,7 +87,7 @@ class Runner:
         return self.time >= self.scenario.episode_seconds
 
     def step(self) -> None:
-        """One physics tick. Everything else runs on its own multiple of this."""
+        """One physics tick."""
         c, dt = self.clock, self.clock.dt
 
         if self.tick % c.human_substeps == 0:
@@ -116,7 +107,7 @@ class Runner:
         self.tick += 1
 
     def advance(self, seconds: float) -> None:
-        """Run for a wall-clock slice. What a viewer wanting one frame asks for."""
+        """Run for a wall-clock slice."""
         for _ in range(max(1, round(seconds * self.clock.physics_hz))):
             if self.done:
                 break
@@ -220,8 +211,6 @@ class PolicyRunner:
             cam = e.cameras[i]
             reach = float(fov_mod.ground_footprint(cam, d.pos, d.quat)[0])
             roll, pitch = d.attitude
-            # Camera axis and airframe forward/up in the world, through the attitude,
-            # so the 3D view draws the exact cone the detector tests against.
             axis = fov_mod.look_direction(cam, d.quat)[0].tolist()
             ex = torch.tensor([[1.0, 0.0, 0.0]], device=d.quat.device)
             ez = torch.tensor([[0.0, 0.0, 1.0]], device=d.quat.device)

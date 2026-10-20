@@ -1,55 +1,5 @@
-"""The person: what they want to do.
-
-This is the *decision* layer.  How the body then actually moves -- momentum, walls,
-other people -- is `crowd.py`.  Splitting them is what lets the paper's model stay
-intact while the motion underneath it gets better.
-
-**Trivedi & Rao, kept verbatim:**
-
-        v = (1 - gamma) * v_sensible  +  gamma * v_instinct
-
-`gamma` is the panic level.  Reimplementing this equation differently would make
-every number incomparable to the published paper, so it is ported as-is.
-
-Four things around it are more accurate than the paper's, and none of them change
-that equation:
-
-  - **gamma responds to what the person actually experiences.**  In the paper it is
-    fixed, or follows a schedule.  Trivedi & Rao themselves define panic as driven by
-    stressors; the paper simplified that away.  Here it is driven by how close the
-    fire is, how thick the smoke is, and how long this has been going on -- and it
-    relaxes rather than jumping, because people do not switch from calm to panicked
-    between one footstep and the next.
-  - **Panic makes you faster and stupider.**  Speed rises with gamma while the
-    sensible term loses weight.  The classic stress finding, and the parameters for
-    it are already sitting unused in the paper's own `panicked.yaml`.
-  - **Smoke slows people down.**  Well established in the evacuation literature
-    (Jin's visibility studies).  The 2D grid could not represent this at all; we have
-    a real smoke field, so it is nearly free.
-  - **Following a rescuer is imperfect.**  The paper assumes that once reached, the
-    person walks an ideal A* path to safety, which flatters the improvement figures.
-    Here they follow with a lag, imprecisely, and lose the drone in thick smoke.
-  - **They go round the fire, not through it.**  The paper's route is A* over the
-    static map, computed once, so the fire is something the person walks into rather
-    than something they avoid.  Here the route is priced: cells near the fire cost
-    more to cross, and the route is recomputed every few seconds, so a blocked street
-    produces a detour the way it would in life.  Nobody re-plans continuously, which
-    is why it is on a slow clock rather than every step.
-  - **A person has width.**  They cannot cut a building's corner, and they cannot
-    squeeze through a gap narrower than they are.  The route is planned over cells
-    with enough clearance for a body, not over cells that merely are not wall.
-
-**One honest simplification.**  With a single evacuee there is no herd, so the
-"instinct" term is flight from the fire plus noise rather than crowd-following.  That
-is the faithful single-person reading of the model; with N > 1 the herd term becomes
-the neighbours' mean velocity and this is where it goes.
-
-**One known gap.**  Fire is sensed from a blurred threat field with a limited radius,
-not through a real line-of-sight check -- so a person can still notice a fire through
-a wall, just not one across the map.  The 2D simulator reads the *global* ground-truth
-grid with no occlusion at all, so this is strictly better, but it is not right.  It
-becomes right when `sensing/occlusion.py` exists.
-"""
+"""The evacuee: a route to safety replanned around the fire, Trivedi-Rao panic mixing a
+sensible velocity with an instinctive one, smoke slowdown, and following a rescuer once led."""
 
 from __future__ import annotations
 
@@ -70,10 +20,6 @@ class PanicParams:
     time_stress_s: float = 90.0  # how long before the situation alone is stressful
     gamma_floor: float = 0.05    # nobody in a burning city is perfectly calm
     perception_m: float = 28.0   # how far a fire is frightening from
-    # Calibrated so full panic costs roughly twice the evacuation time, which is
-    # what the paper's Figure 2 reports. Retuned after the flow field started
-    # picking the best neighbour instead of differencing the field: better
-    # routes made the calm baseline faster, so the same wander cost 3x.
     instinct_turn: float = 0.9   # how fast a panicked heading wanders, rad/sqrt(s)
     instinct_bias: float = 0.70  # how strongly it is still pulled toward the exit
     smoke_slowdown: float = 0.55 # fraction of speed lost in the thickest smoke
@@ -87,7 +33,7 @@ class PanicParams:
 
 
 class Human:
-    """One evacuee per environment. Positions in metres, on the ground plane."""
+    """One evacuee per environment."""
 
     def __init__(self, terrain, batch: int, params: PanicParams | None = None, device=None):
         self.terrain = terrain
@@ -125,42 +71,17 @@ class Human:
         self.following.zero_()
         self.elapsed = 0.0
 
-        # Plan over cells a body actually fits in.  Planning over "not wall" sends
-        # people diagonally through building corners and down gaps narrower than
-        # their shoulders, both of which look exactly as wrong as they are.
         clear = nav.clearance(self.terrain.walkable, cell)
         self._passable = self.terrain.walkable & (clear >= self.p.body_radius_m)
         if not bool(self._passable[tuple((self.goal[0] / cell).long().tolist())]):
             self._passable = self.terrain.walkable      # a goal in a doorway still works
 
         self._replan(fire=None)
-        # Marked as never planned, *after* the fire-blind plan above has set the
-        # timestamp -- so the first real step replans with the fire in view.  With the
-        # order reversed, the first fire-aware route came two seconds in, by which
-        # time a person walking a straight line had committed to it.
         self._replanned_at = -self.p.replan_every_s
-        # Start out heading the sensible way, so panic degrades a good plan rather
-        # than starting from a random one.
         self.instinct_dir = nav.sample(self._flow, self.pos, cell).clone()
 
     def _replan(self, fire) -> None:
-        """Recompute the route around the fire.
-
-        **A burning cell cannot be entered.**  That is the paper's rule, kept exactly:
-        `Fire.can_overlap` in `firegrid` is true only for the drones, so the evacuee's
-        A* treats fire as a wall.  An earlier version here priced fire at 61x instead
-        of blocking it, and people walked through it whenever the way round was long
-        -- which it always is on a real block.
-
-        Two things the paper has no need for, because its fire never goes out:
-        burnt ground costs `burnt_cost` (nobody walks across hot ash if there is a
-        street), and cells within 12 m of flame are priced up so the route keeps its
-        distance rather than hugging the edge.
-
-        If the fire has cut every route, the field is unreachable from where they
-        stand; then, and only then, the block is relaxed to a very high price so
-        they head for the least-bad way out instead of standing still.
-        """
+        """Recompute the route with burning cells as walls and ash priced high."""
         cell = self.terrain.cell_size_m
         goal = (self.goal / cell).long()
         if fire is None:
@@ -193,13 +114,6 @@ class Human:
         cell = self.terrain.cell_size_m
         sensible = nav.sample(self._flow, self.pos, cell)
 
-        # Instinct is "run from the fire" when there is a fire to run from.  With
-        # none in reach it is a *persistent* poor choice of direction, not fresh noise
-        # each step: independent noise averages out over a few seconds and costs
-        # nothing, whereas committing to a wrong heading for several seconds is what
-        # actually makes a panicked evacuation take longer.  That is the mechanism
-        # behind the paper's Figure 2, and with a single evacuee it stands in for the
-        # herd term, which has no meaning when there is no herd.
         turn = rng.normal(self.batch, 2) * (self.p.instinct_turn * dt ** 0.5)
         self.instinct_dir = _unit(
             self.instinct_dir + turn + self.p.instinct_bias * sensible * dt
@@ -227,13 +141,7 @@ class Human:
         self.reached |= (self.pos - self.goal).norm(dim=-1) < 1.5
 
     def expose_to(self, fire) -> None:
-        """Standing in a burning cell hurts.
-
-        Without this there is no way for an evacuation to fail, so there is nothing
-        for a rescuer to prevent: the person strolls through the fire and out the
-        other side, and a policy that does nothing scores as well as one that works.
-        A failure mode is what makes the task a task.
-        """
+        """Standing in a burning cell hurts; enough of it and the person is lost."""
         cell = self.terrain.cell_size_m
         c = (self.pos / cell).long()
         w, h = fire.burning.shape[-2:]
@@ -248,19 +156,7 @@ class Human:
     # -------------------------------------------------------------- internals
 
     def _threat(self, fire, smoke):
-        """How near the fire is, 0..1, and which way is away from it.
-
-        **Nearest, not total.**  The obvious implementation -- blur the fire and read
-        the value -- measures how much fire is nearby, not how close it is.  Blur an
-        extended fire and every cell on a small map reads as maximally alarming, so
-        panic pins at one and the person spends the episode fleeing from everywhere at
-        once.  Proximity has to be a *max* over nearby fire, not a sum of it.
-
-        Three dilations at increasing radius approximate that for the cost of three
-        max-pools: is there fire within arm's reach, within a few metres, within
-        sight.  Bounded by the intensity of a single cell however large the fire, and
-        it still falls off with distance.
-        """
+        """How near the fire is (0..1) and which way is away from it."""
         cell = self.terrain.cell_size_m
         heat = (fire.intensity + 0.4 * smoke.column_density()).clamp(0, 2)
         field = nav.proximity(heat, self.p.perception_m, cell)

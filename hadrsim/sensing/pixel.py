@@ -1,14 +1,8 @@
-"""The pixel detector: a small CNN that reads the rendered camera image.
+"""The pixel detector: a small CNN over the rendered camera image, trained offline on
+oracle labels.
 
-    python -m hadrsim.sensing.pixel            # train it (a few minutes on a GPU)
-    hadrsim-train --detector pixel             # fly with it
-
-Trained offline on images from `sensing.camera` labelled by the oracle (is the person
-visible, where in the frame, how tall, how far).  It outputs one detection per frame
-with a confidence, so it misses the small and the far and the smoky, and sometimes
-sees people who are not there -- the failure modes a real detector has, learned
-rather than assumed.  On hardware this module is what gets replaced.
-"""
+    python -m hadrsim.sensing.pixel      # train; weights go to configs/pixel_detector.pt
+    hadrsim-train --detector pixel"""
 
 from __future__ import annotations
 
@@ -51,7 +45,7 @@ def labels(camera, drone, targets):
 
 
 class PixelDetector:
-    """Same signature and output as the other detectors; the measurement comes from pixels."""
+    """Same inputs and output as the other detectors; the measurement comes from the rendered image."""
 
     name = "pixel"
 

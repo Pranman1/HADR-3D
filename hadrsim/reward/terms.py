@@ -1,19 +1,6 @@
-"""Reward terms: one small function per thing we want, each reading a `View`.
-
-Three rules, each learned the hard way (OVERNIGHT_FINDINGS.md §1, §6):
-
-- **A term reads the team's beliefs, never the world.**  It is only ever handed a
-  `View`, so degrading the drones' vision degrades the reward too.
-- **A term returns a magnitude (>= 0); the weight carries the sign.**  A negative
-  term with a negative weight cancels silently.
-- **Weights live in `configs/reward/*.yaml`**, and every term's contribution is
-  recorded separately, so "which term paid for that?" is a lookup.
-
-`paper.py` holds the terms with a counterpart in the 2D paper (l0, l1, l2, l3, l7, the
-time decay and the fire penalty), and is the default.  Add your own with `@term` in
-a .py file your weights yaml names on its `terms:` line (`experiments/city_reward.*`
-is the worked example).
-"""
+"""Reward terms: one function per thing we pay for, each reading a `View` of what the
+team believes, never the world.  A term returns a magnitude >= 0; the weight carries
+the sign.  Register your own with `@term` in a module named by your weights yaml."""
 
 from __future__ import annotations
 
@@ -32,8 +19,7 @@ def term(fn):
 
 @dataclass
 class View:
-    """Everything a reward may look at: what the team believes, not what is true.
-    Where nobody has seen anything, `person_seen` is false and `person_pos` is noise."""
+    """Everything a reward may look at: the team's beliefs, not the truth."""
 
     drone_pos: torch.Tensor        # (B, D, 3)
     person_pos: torch.Tensor       # (B, 3) believed

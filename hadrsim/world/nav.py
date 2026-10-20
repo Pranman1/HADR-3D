@@ -1,23 +1,5 @@
-"""Which way is out.
-
-The panic model needs a "sensible" direction to blend against -- the route a calm
-person would take.  The 2D simulator recomputes A* for that, per person, per step.
-That is fine for one person on a 25 x 25 grid and hopeless for thousands of parallel
-environments.
-
-Instead, solve it once per episode for the whole map: a distance field holding, for
-every cell, how far it is to the exit.  Then the sensible direction at any position
-is just downhill, and reading it costs one lookup no matter how many people ask.
-
-Computed by relaxation rather than by a queue.  Repeatedly taking each cell's
-distance as the best of its neighbours' plus the step between them converges on the
-true shortest path, and every cell can be updated at once -- which is what makes it
-run on a GPU across a whole batch.  A queue-based Dijkstra is asymptotically better
-and entirely sequential, so it loses badly here.
-
-Eight-connected, with diagonals costing sqrt(2), so paths come out at sensible angles
-instead of only in the four compass directions.
-"""
+"""Grid navigation fields: cost-to-go, clearance from walls, proximity to hot cells, and
+the flow (unit vectors toward the goal).  All batched over environments."""
 
 from __future__ import annotations
 
@@ -38,18 +20,7 @@ def distance_field(
     max_iters: int | None = None,
     cost: torch.Tensor | None = None,
 ) -> torch.Tensor:
-    """(B, W, H) cost-to-go to the goal, by the cheapest walkable path.
-
-    `walkable` is (W, H) and shared -- every environment walks the same city -- or
-    (B, W, H) when something that differs per environment, like a fire, is blocking.
-    `goal_xy` is (B, 2) in cells. Unreachable cells come back as UNREACHABLE, not inf,
-    so that arithmetic on the field does not produce NaN.
-
-    `cost` is an optional (B, W, H) multiplier on the price of entering each cell.
-    One means ordinary ground; larger means somewhere you would rather not go, which
-    is how a route bends around a fire instead of walking into it.  With no cost the
-    result is plain distance in metres.
-    """
+    """(B, W, H) cost-to-go to the goal by the cheapest walkable path."""
     w, h = walkable.shape[-2:]
     b = len(goal_xy)
     device = walkable.device
@@ -64,8 +35,6 @@ def distance_field(
         blocked = blocked[None].expand(b, w, h)
     dist = dist.masked_fill(blocked, UNREACHABLE)
 
-    # A shortest path never needs more steps than the map's diagonal, and relaxing in
-    # both sweep directions each round roughly halves the rounds needed.
     if max_iters is None:
         max_iters = w + h
 
@@ -84,12 +53,7 @@ def distance_field(
 
 
 def clearance(walkable: torch.Tensor, cell_size_m: float = 1.0) -> torch.Tensor:
-    """(W, H) metres from each cell to the nearest wall.
-
-    Static, so computed once per map and shared by every environment.  The social
-    force model needs it to push people away from walls, and its gradient is the
-    direction to push them.
-    """
+    """(W, H) metres from each cell to the nearest wall."""
     w, h = walkable.shape
     dist = torch.where(
         walkable,
@@ -110,18 +74,7 @@ def clearance(walkable: torch.Tensor, cell_size_m: float = 1.0) -> torch.Tensor:
 
 def proximity(field: torch.Tensor, radius_m: float, cell_size_m: float = 1.0,
               levels: int = 3) -> torch.Tensor:
-    """(B, W, H) how near the nearest hot thing is, 0..max(field), falling off to 0.
-
-    "How close is the fire" is a *max* over what is nearby, not a sum of it: blurring
-    measures how much fire there is, so on a small map an extended fire reads as
-    maximal everywhere.  A max-pool of the right radius says the right thing.
-
-    Doing it with one big kernel is unusably slow -- a 57x57 pool over a 300x300 map
-    is three hundred million operations, and at ten times a second that is the whole
-    frame budget.  Chaining small dilated pools reaches just as far for a hundredth
-    of the work: dilations 1, 2, 4, 8 ... each add their own span, so a handful of
-    3x3 pools cover thirty metres.
-    """
+    """(B, W, H) nearness to the nearest hot cell, falling off to 0 within `radius_m`."""
     import torch.nn.functional as Fn
 
     want = max(1, int(round(radius_m / cell_size_m)))
@@ -131,8 +84,6 @@ def proximity(field: torch.Tensor, radius_m: float, cell_size_m: float = 1.0,
     reach, dilation, rings = 0, 1, []
     while reach < want:
         dilation = min(dilation, want - reach)
-        # Padded by hand: max_pool2d caps padding at half the kernel however far the
-        # dilation reaches, and zero is a safe pad for a max over a non-negative field.
         x = Fn.max_pool2d(Fn.pad(x, (dilation,) * 4), 3, stride=1, dilation=dilation)
         reach += dilation
         dilation *= 2
@@ -146,21 +97,7 @@ def proximity(field: torch.Tensor, radius_m: float, cell_size_m: float = 1.0,
 
 
 def flow(dist: torch.Tensor) -> torch.Tensor:
-    """(B, W, H, 2) unit vectors pointing the way out.
-
-    **Pick the best neighbour, do not difference the field.**  A central difference
-    is fine in the open and wrong wherever it matters.  Put an obstacle -- a
-    building, or a fire the route is priced away from -- directly between someone and
-    their goal, and the x-difference says "the way ahead is expensive, go back" while
-    the y-difference is zero by symmetry, so the flow points them straight backwards
-    instead of around.  The route was there; the reader of it was not.
-
-    Taking the cheapest of the eight neighbours, one step of lookahead including what
-    the step itself costs, is exact for a field built this way and degrades sensibly
-    at walls, since a blocked neighbour is simply never the cheapest.
-
-    Zero only where there is genuinely nowhere to go: at the goal, or walled off.
-    """
+    """(B, W, H, 2) unit vectors pointing the way out."""
     offsets = torch.tensor([[dx, dy] for dx, dy, _ in NEIGHBOURS],
                            dtype=dist.dtype, device=dist.device)
     step_costs = torch.tensor([c for _, _, c in NEIGHBOURS],
@@ -170,10 +107,6 @@ def flow(dist: torch.Tensor) -> torch.Tensor:
     neighbours = torch.stack(
         [_shift(dist, -dx, -dy) for (dx, dy, _) in NEIGHBOURS], dim=0
     )                                                          # (8, B, W, H)
-    # Step cost breaks ties toward the straight neighbours; it must not enter the
-    # "is anywhere better" test, because on a converged field the winning neighbour
-    # plus its step cost *equals* this cell's own value by construction -- so testing
-    # against that marks every cell in the map as stuck.
     best = (neighbours + step_costs[:, None, None, None]).argmin(dim=0)
     v = offsets[best]                                          # (B, W, H, 2)
 
@@ -183,12 +116,7 @@ def flow(dist: torch.Tensor) -> torch.Tensor:
 
 
 def sample(field: torch.Tensor, xy_m: torch.Tensor, cell_size_m: float) -> torch.Tensor:
-    """Read a (B, W, H[, C]) field at continuous positions (B, 2) given in metres.
-
-    Nearest cell rather than bilinear: the fields this reads are already smooth at the
-    scale a person moves in one step, and clamping keeps someone who wanders off the
-    map from indexing out of bounds.
-    """
+    """Read a (B, W, H[, C]) field at continuous positions (B, 2) in metres."""
     w, h = field.shape[1], field.shape[2]
     cells = (xy_m / cell_size_m).long()
     x = cells[:, 0].clamp(0, w - 1)

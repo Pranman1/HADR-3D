@@ -1,29 +1,5 @@
-"""The autopilot: turning "go this fast" into four rotor speeds.
-
-PX4's cascade, with PX4's default gains, because PX4 is the firmware a real X500
-actually runs.  Imitating it rather than inventing something means the thing the
-policy learns to command is the thing a real aircraft will do with that command.
-
-    velocity setpoint  ->  PID          <- the policy plugs in HERE
-    acceleration       ->  tilt + thrust
-    attitude           ->  P
-    body rates         ->  PID
-                       ->  mixer  ->  four rotor speeds
-
-Only the middle of the stack: position control sits above (the policy does that job)
-and the motors below.
-
-**This is for training.**  Evaluation runs the real firmware in SITL over PX4's own
-simulator interface, which is stronger than matching it -- see the plan, section
-8.2b.  What this has to be is fast enough for thousands of aircraft in parallel and
-close enough that a policy trained against it is not surprised by the real thing.
-
-The one structural thing worth knowing about a quadrotor: **it cannot push
-sideways.**  All four rotors point the same way, so the only way to accelerate
-horizontally is to tilt and use part of the thrust sideways -- which is why
-`_attitude_from_accel` builds an attitude out of a desired acceleration rather than
-tracking one it was given.
-"""
+"""A PX4-style cascade: velocity -> acceleration -> attitude -> body rates -> rotor speeds.
+Re-implemented with PX4's default gains; not PX4's code."""
 
 from __future__ import annotations
 
@@ -73,7 +49,7 @@ class Autopilot:
     # ------------------------------------------------------------------ loops
 
     def _velocity_loop(self, vel, want, dt) -> torch.Tensor:
-        """Velocity error to desired acceleration. PID, with the integral bounded."""
+        """Velocity error to desired acceleration."""
         error = want - vel
         self._vel_integral = (self._vel_integral + error * dt).clamp(-4.0, 4.0)
         derivative = (error - self._last_vel_error) / max(dt, 1e-6)
@@ -85,14 +61,7 @@ class Autopilot:
         return gains_p * error + gains_i * self._vel_integral + gains_d * derivative
 
     def _attitude_from_accel(self, accel, want_yaw):
-        """The attitude that would produce this acceleration, and the thrust to go with it.
-
-        A quadrotor cannot push sideways: its thrust is always along its own up axis,
-        so wanting to accelerate forward *is* wanting to lean forward.  The desired
-        body-up is therefore the direction of (acceleration + gravity), and the
-        aircraft is tilted to point at it -- capped, because past a certain lean there
-        is not enough thrust left to hold the height.
-        """
+        """The attitude and thrust that would produce this acceleration."""
         want_up = accel.clone()
         want_up[:, 2] = want_up[:, 2] + GRAVITY
 
@@ -106,22 +75,13 @@ class Autopilot:
         body_up = want_up / norm[:, None]
         thrust_n = (norm * self.af.mass_kg).clamp(0.0, self.af.max_thrust_n)
 
-        # Attitude from a desired up-vector and a desired heading.  Rotate the wanted
-        # up into the yaw frame first, so roll and pitch describe the lean relative to
-        # where the aircraft is pointing rather than to the world.
-        #
-        # Signs verified against the rotation module rather than assumed: with z up
-        # and body x forward, *positive* pitch tilts the up-vector toward +x and
-        # positive roll tilts it toward -y.  Borrowing the aerospace convention here,
-        # where z is down and nose-down pitch is negative, flies the aircraft
-        # backwards -- which is exactly what it did.
         up_yaw = rot.rotate_inv(rot.from_yaw(want_yaw), body_up)
         pitch = torch.atan2(up_yaw[:, 0], up_yaw[:, 2].clamp_min(1e-3))
         roll = torch.atan2(-up_yaw[:, 1], up_yaw[:, 2].clamp_min(1e-3))
         return rot.from_euler(roll, pitch, want_yaw), thrust_n
 
     def _attitude_loop(self, quat, want_quat, yaw_rate) -> torch.Tensor:
-        """Attitude error to body rates. Proportional, on the shortest rotation."""
+        """Attitude error to body rates."""
         error = rot.multiply(_conjugate(quat), want_quat)
         # Both q and -q are the same attitude; pick the one that turns the short way.
         error = torch.where((error[:, :1] < 0).expand_as(error), -error, error)
@@ -130,20 +90,7 @@ class Autopilot:
         return torch.cat([rate[:, :2], (rate[:, 2:] + yaw_rate[:, None])], -1)
 
     def _rate_loop(self, omega, want_rate, dt) -> torch.Tensor:
-        """Body-rate error to torque. The innermost and fastest loop.
-
-        Two details that decide whether this is stable:
-
-        **PX4's gains are normalised**, not physical.  Its rate controller outputs a
-        number in [-1, 1] which the mixer scales to whatever torque the airframe can
-        make, so turning those gains into newton-metres needs the airframe's actual
-        limit.  Picking a scale factor by eye instead produced torques an order of
-        magnitude too large, and a drone that could not hold a hover.
-
-        **The derivative acts on the measurement, not on the error**, which is what
-        PX4 does.  Differentiating the error means every change of setpoint arrives as
-        a spike, and here the setpoint changes at every control step.
-        """
+        """Body-rate error to torque: the innermost PID."""
         error = want_rate - omega
         self._rate_integral = (self._rate_integral + error * dt).clamp(-0.5, 0.5)
         d_measured = -(omega - self._last_rate_error) / max(dt, 1e-6)
@@ -157,12 +104,7 @@ class Autopilot:
         return u * limit
 
     def _mix(self, thrust_n, torque, drone) -> torch.Tensor:
-        """Thrust and torque to four rotor speeds.
-
-        The inverse of the geometry in `drone.py`: each rotor contributes a quarter of
-        the thrust, plus or minus its share of each torque according to where it sits
-        and which way it spins.
-        """
+        """Thrust and torque to four rotor speeds."""
         arm = drone.rotor_xy                                   # (4, 2)
         af = self.af
 
@@ -171,8 +113,6 @@ class Autopilot:
         share = share - torque[:, 1:2] * arm[:, 0] / (4 * af.arm_m ** 2 / 2)
         share = share + torque[:, 2:3] * drone.spin / (4 * af.moment_coeff)
 
-        # Thrust is proportional to the square of rotor speed, so inverting it is a
-        # square root -- and a rotor cannot produce negative thrust.
         return (share.clamp_min(0.0) / af.thrust_coeff).sqrt().clamp(
             0.0, af.max_rotor_rads)
 

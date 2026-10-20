@@ -1,26 +1,5 @@
-"""Real drones, as tables of numbers.
-
-The equations of motion in `drone.py` are the same for every quadrotor ever built.
-What differs between one aircraft and another is exactly this: mass, arm length,
-inertia, how much thrust a rotor makes, how fast the motors respond.  Keeping them
-here means adding an airframe is adding ten numbers, and it means the simulated
-drone is a *specific* drone rather than a plausible one.
-
-**X500 V2 is the default** because it is the standard PX4 research quadrotor -- a
-real machine the group could buy, big enough to carry a camera and a companion
-computer, and the one PX4's own SITL model describes.  Matching PX4's parameters is
-what makes "validate against SITL" mean anything.
-
-**Crazyflie is here as a cross-check**, not as a candidate: at 27 g it cannot carry
-a camera, so it is the wrong scale for this problem entirely.  It earns its place
-because it is the best-characterised quadrotor in the literature, so if the dynamics
-are right for both a 2 kg machine and a 27 g one, they are probably right.
-
-A caveat worth keeping: inertias are the least reliable numbers here.  Mass and arm
-length are measurable with a scale and a ruler; a full inertia tensor is not, and
-published values for a given frame vary.  Anything that turns on precise attitude
-response should be checked against a real flight log first -- see the plan's rung 4.
-"""
+"""Airframe parameters (mass, inertia, rotor constants, speed limits) as plain data.
+X500_V2 is the shipped drone; `paper_parity` builds its own."""
 
 from __future__ import annotations
 
@@ -58,17 +37,7 @@ class Airframe:
 
     @property
     def max_torque(self) -> tuple:
-        """(roll, pitch, yaw) torque the rotors can actually produce, in N m.
-
-        PX4's rate gains are normalised: its controller outputs a number in [-1, 1]
-        that the mixer scales to whatever the airframe can do.  Converting those
-        gains into physical torque needs that scale, and inventing one instead is how
-        a stable controller becomes an unstable one.
-
-        Roll and pitch come from running one side of the aircraft flat out and the
-        other at nothing; yaw comes from the rotors' drag torques, which is far
-        weaker -- and is why a quadrotor turns much more slowly than it rolls.
-        """
+        """(roll, pitch, yaw) torque the rotors can actually produce, in N m."""
         per_rotor = self.thrust_coeff * self.max_rotor_rads ** 2
         offset = self.arm_m / 2 ** 0.5
         lateral = 2.0 * per_rotor * offset
@@ -76,12 +45,10 @@ class Airframe:
 
     @property
     def hover_rotor_rads(self) -> float:
-        """Rotor speed that exactly holds the aircraft up. The autopilot's anchor."""
+        """Rotor speed that exactly holds the aircraft up."""
         return (self.weight_n / (4.0 * self.thrust_coeff)) ** 0.5
 
 
-# PX4's own SITL description of this airframe. 500 mm wheelbase, so the rotors sit
-# 0.25 m from the centre and +-0.177 m along each body axis.
 X500_V2 = Airframe(
     name="Holybro X500 V2",
     mass_kg=2.0,

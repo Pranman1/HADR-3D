@@ -1,9 +1,5 @@
-"""Terms with a counterpart in the 2D paper (Mendoza et al., GHTC 2025).
-
-Analogues, not copies: the paper's drones move on a grid and "see" a window of
-cells, so each term is restated for continuous space and a camera.  Where the paper
-reads the evader's masked position, these read the team's belief.
-"""
+"""Terms with a counterpart in the 2D paper (Mendoza et al., GHTC 2025), restated for
+continuous space and a camera.  Each reads the team's belief, not the truth."""
 
 from __future__ import annotations
 
@@ -17,7 +13,7 @@ BELIEF_HALFLIFE_S = 12.0
 
 @term
 def capture(v: View) -> torch.Tensor:
-    """Paper's l3, the capture bonus: paid once, on the step the low rescuer reaches them."""
+    """Paper's l3, the capture bonus: paid once, on the step it happens."""
     return v.captured.float()
 
 
@@ -35,8 +31,7 @@ def evacuee_in_llr_fov(v: View) -> torch.Tensor:
 
 @term
 def proximity(v: View) -> torch.Tensor:
-    """Paper's l2: the low rescuer closing on the person -- here on the *last known*
-    position, trusted less the staler it is, so "go where they just were" still pays."""
+    """Paper's l2: the low rescuer closing on the last known position, trusted less the staler it is."""
     if v.n_drones < 2:
         return v.zeros()
     age = v._or_zero("belief_age")
@@ -47,8 +42,7 @@ def proximity(v: View) -> torch.Tensor:
 
 @term
 def role_coordination(v: View) -> torch.Tensor:
-    """Paper's l7, the term its title rests on: the high rescuer watching while the
-    low one closes.  Falls away as the two converge -- stacked drones are not a team."""
+    """Paper's l7: the high rescuer watching while the low one closes, fading as they converge."""
     if v.n_drones < 2:
         return v.zeros()
     hlr_watching = v.seen_by[:, 0].float()
@@ -65,6 +59,5 @@ def time_penalty(v: View) -> torch.Tensor:
 
 @term
 def fire_proximity(v: View) -> torch.Tensor:
-    """How close the nearest drone is to fire, 0..1. Weighted negative.  The paper
-    charges this only while the evader is visible; here it is unconditional."""
+    """Nearest drone's fire proximity, 0..1; weighted negative."""
     return v.fire_near.max(dim=-1).values
