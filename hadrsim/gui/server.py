@@ -185,7 +185,7 @@ def main() -> None:
               f"        you left running. Using {port} instead; the old one still works.")
     print(f"\n  hadrsim control panel")
     print(f"    on this machine   http://localhost:{port}")
-    print(f"    from another      http://{_lan_ip()}:{port}\n")
+    print(f"    from another      http://{_lan_ip()}:{port}\n", flush=True)
     uvicorn.run(app, host="0.0.0.0", port=port, log_level="warning")
 
 

@@ -48,9 +48,8 @@ class OracleDetector:
         det = Detections.empty(batch, self.slots, targets.device)
 
         seen, distance, _ = fov_mod.in_view(self.camera, drone.pos, drone.quat, targets)
-        if smoke is not None or terrain is not None:
-            clear, _ = occlusion.visible(terrain, drone.pos, targets, smoke, env)
-            seen = seen & clear
+        clear, _ = occlusion.visible(terrain, drone.pos, targets, smoke, env)
+        seen = seen & clear
 
         keep = min(n, self.slots)
         order = torch.where(seen, distance, torch.full_like(distance, 1e9)).argsort(-1)
@@ -88,9 +87,7 @@ class GeometricDetector(OracleDetector):
         device = targets.device
 
         seen, distance, offset = fov_mod.in_view(self.camera, drone.pos, drone.quat, targets)
-        clarity = torch.ones_like(distance)
-        if terrain is not None:
-            _, clarity = occlusion.visible(terrain, drone.pos, targets, smoke, env)
+        _, clarity = occlusion.visible(terrain, drone.pos, targets, smoke, env)
         seen = seen & (clarity > 0)
 
         apparent = HUMAN_HEIGHT_M / distance.clamp_min(1.0)

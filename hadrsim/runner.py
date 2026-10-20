@@ -74,7 +74,6 @@ class Runner:
 
         self.tick = 0
         self.want = torch.zeros(n, 2)
-        self.reached_at: list[float | None] = [None] * n
 
     # ------------------------------------------------------------------- step
 
@@ -101,9 +100,6 @@ class Runner:
         if self.tick % max(1, int(c.physics_hz / 2)) == 0:
             self.smoke.update(self.fire, self.wind)
 
-        for i, done in enumerate(self.human.reached.tolist()):
-            if done and self.reached_at[i] is None:
-                self.reached_at[i] = self.time
         self.tick += 1
 
     def advance(self, seconds: float) -> None:

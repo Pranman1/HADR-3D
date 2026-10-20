@@ -11,9 +11,6 @@ import torch
 
 from hadrsim.core import spec
 
-_NONE = (None, None)
-
-
 class Policy(Protocol):
     name: str
 

@@ -31,7 +31,6 @@ class View:
     was_captured: torch.Tensor     # (B,) bool -- at any point this episode
     fire_near: torch.Tensor        # (B, D) fire proximity at each drone, 0..1
     action: torch.Tensor           # (B, D, 4)
-    dt: float = 0.5
     harmed: torch.Tensor | None = None      # (B,) the evacuee was caught by the fire
     new_area: torch.Tensor | None = None    # (B,) fraction of map newly searched
     newly_seen: torch.Tensor | None = None  # (B,) spotted for the first time this step

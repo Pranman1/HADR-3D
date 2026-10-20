@@ -65,8 +65,12 @@ class Env:
         self.detectors = [det_mod.make(detector, c) for c in self.cameras]
         self.reward = Composer(weights)
 
-        self._start_alt = list(start_alt) if start_alt else [40.0, 4.0]
+        self._start_alt = [min(max(a, lo), hi) for a, (lo, hi)
+                           in zip(start_alt or [40.0, 4.0], self.ALT_BANDS)]
         self.launch_offset_m = None    # set by a curriculum; None uses the fixed base
+        xs = torch.arange(self.terrain.shape[0], device=self.device) * self.cell
+        ys = torch.arange(self.terrain.shape[1], device=self.device) * self.cell
+        self._grid = torch.meshgrid(xs, ys, indexing="ij")
         self.reset()
 
     # ------------------------------------------------------------------ setup
@@ -88,7 +92,7 @@ class Env:
             mask = torch.ones(self.batch, dtype=torch.bool, device=self.device)
 
         start, goal, ignite = self._draw_episodes()
-        self.goal, self.start = goal, start
+        self.goal = goal
 
         self.fire.reset((ignite / self.cell).long(), radius_m=sc.fire_radius_m)
         self.human.reset(start, goal)
@@ -107,7 +111,6 @@ class Env:
         self.active = torch.ones(self.batch, dtype=torch.bool, device=self.device)
         self._was_reached = torch.zeros(self.batch, dtype=torch.bool, device=self.device)
         self._was_harmed = torch.zeros(self.batch, dtype=torch.bool, device=self.device)
-        self._newly = (self._was_reached, self._was_harmed)
         return self.observe()
 
     def _draw_episodes(self):
@@ -129,8 +132,6 @@ class Env:
     def _launch_drones(self, start, goal) -> None:
         """Put both rescuers at the launch point, at their role's starting altitude."""
         sc = self.scenario
-        self._start_alt = [min(max(a, lo), hi) for a, (lo, hi)
-                           in zip(self._start_alt, self.ALT_BANDS)]
         if self.launch_offset_m is None:
             base = torch.tensor(sc.drone_start, device=self.device).expand(self.batch, 2)
         else:
@@ -188,6 +189,8 @@ class Env:
         extent = torch.tensor([w_m, h_m, self.ALT_MAX], device=self.device)
         speed = self.drones[0].af.max_speed_mps
         half_pi = math.pi / 2
+        goal3 = torch.cat([self.goal, torch.zeros(self.batch, 1, device=self.device)], -1)
+        ones = torch.ones(self.batch, 1, device=self.device)
 
         out = []
         for i, drone in enumerate(self.drones):
@@ -212,10 +215,7 @@ class Env:
                                d.confidence[..., None],
                                (age[..., None] / 30.0).clamp(0, 1)], -1)
 
-            mate = torch.cat([(other.pos - drone.pos) / extent,
-                              torch.ones(self.batch, 1, device=self.device),
-                              torch.zeros(self.batch, 1, device=self.device)], -1)
-            goal3 = torch.cat([self.goal, torch.zeros(self.batch, 1, device=self.device)], -1)
+            mate = torch.cat([(other.pos - drone.pos) / extent, ones, 0 * ones], -1)
             task = torch.cat([(goal3 - drone.pos) / extent,
                               self._time_left()[:, None]], -1)
 
@@ -236,10 +236,7 @@ class Env:
         before = self.searched.sum(dim=(1, 2))
 
         w, h = self.terrain.shape
-        xs = torch.arange(w, device=self.device) * self.cell
-        ys = torch.arange(h, device=self.device) * self.cell
-        gx, gy = torch.meshgrid(xs, ys, indexing="ij")
-
+        gx, gy = self._grid
         for drone, camera in zip(self.drones, self.cameras):
             reach = fov.ground_footprint(camera, drone.pos, drone.quat)
             dist = ((gx[None] - drone.pos[:, 0, None, None]) ** 2
@@ -345,7 +342,6 @@ class Env:
         newly_harmed = self.human.harmed & ~self._was_harmed
         self._was_reached = self.human.reached.clone()
         self._was_harmed = self.human.harmed.clone()
-        self._newly = (newly_reached, newly_harmed)
         self.human.led_by(llr_drone.pos[:, :2], self.capture_radius)
 
         obs = self.observe()
@@ -353,7 +349,7 @@ class Env:
         newly_seen = seen & (self._first_seen < 0)
         self._first_seen = torch.where(newly_seen, self._time_left(), self._first_seen)
 
-        reward = self.reward(self._view(actions, newly, newly_seen))
+        reward = self.reward(self._view(actions, newly, newly_seen, newly_reached, newly_harmed))
         self.step_count += 1
 
         done = ((self.step_count >= self.clock.max_steps)
@@ -365,7 +361,7 @@ class Env:
                                          "reached": self.human.reached,
                                          "harmed": self.human.harmed}
 
-    def _view(self, actions, newly_captured, newly_seen=None) -> View:
+    def _view(self, actions, newly_captured, newly_seen, newly_reached, newly_harmed) -> View:
         _, believed, confidence, seen_by = self._last
         goal3 = torch.cat([self.goal, torch.zeros(self.batch, 1, device=self.device)], -1)
         fire_near = torch.stack([nav.sample(self._fire_near, d.pos[:, :2], self.cell)
@@ -382,12 +378,10 @@ class Env:
             was_captured=self.captured,
             fire_near=fire_near,
             action=actions,
-            dt=self.clock.control_dt,
             harmed=self.human.harmed,
             new_area=self._new_area,
-            newly_seen=(newly_seen if newly_seen is not None
-                        else torch.zeros_like(self.human.reached)),
-            newly_reached=self._newly[0],
-            newly_harmed=self._newly[1],
+            newly_seen=newly_seen,
+            newly_reached=newly_reached,
+            newly_harmed=newly_harmed,
             time_left=self._time_left(),
         )

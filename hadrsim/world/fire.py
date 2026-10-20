@@ -184,12 +184,3 @@ class Fire:
 
         return (self.p.spread_prob * gain / dist).clamp(0.0, 1.0)
 
-
-def _shift(x: torch.Tensor, dx: int, dy: int) -> torch.Tensor:
-    """Translate a (B, W, H) field by one cell, zero-filled."""
-    pad = (max(dy, 0), max(-dy, 0), max(dx, 0), max(-dx, 0))
-    out = F.pad(x, pad)
-    w, h = x.shape[-2:]
-    x0 = max(-dx, 0)
-    y0 = max(-dy, 0)
-    return out[..., x0:x0 + w, y0:y0 + h]
