@@ -238,7 +238,6 @@ view and `gui/scene3d.js` the 3D one. `viz/render.py` writes mp4s.
 - **`reward_sweep.py`** — the seven reward balances, through `train()`.
 - **`sweep.yaml`** — a wandb sweep over `hadrsim-train`'s flags.
 
-### `tools/shot3d.py` — headless screenshots of the panel (Playwright).
 ### `tests/` — 183 tests; `test_golden.py` is the bit-for-bit refactor guard. CI runs them on CPU.
 ### documents
 `OVERNIGHT_FINDINGS.md` (what was found, section by section, with measurements),

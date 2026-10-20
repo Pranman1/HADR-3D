@@ -229,7 +229,7 @@ Not decoration — each of these fixes something the old view got *wrong*:
 - Smoke columns lean with the live wind vector; one flickering light at the fire's
   centroid; a low sun casting real shadows; dusk sky.
 
-Stills: `docs/shots/gui_3d_wide.png`, `gui_3d_llr_closeup.png`, `gui_3d_hlr_closeup.png`.
+Stills: `gui_3d_wide.png`, `gui_3d_llr_closeup.png`, `gui_3d_hlr_closeup.png` in the notes folder beside the repo.
 
 ## 6. Sunday: the evacuee, the closeness reward, full fidelity  *(14 Sep)*
 
