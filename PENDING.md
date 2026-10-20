@@ -1,4 +1,4 @@
-# Pending work — hadr-sim3d, as of 20 Sep 2026
+# Pending work — hadr-sim3d, as of 20 Oct 2026
 
 Ordered by what I would do next. Each line says why, and roughly how big.
 
@@ -12,8 +12,8 @@ Ordered by what I would do next. Each line says why, and roughly how big.
    camera (search is nearly free at 100 m radius with an 80 m camera — even hovering
    sees the person 100% of the time), launch further out, a person who moves less
    predictably. *Experiment design, then GPU days.*
-2. **Hyperparameter sweep with wandb, on more than one GPU.** `sandbox/train.py` +
-   `sandbox/sweep.yaml` are ready; nothing has been swept but reward weights. Five
+2. **Hyperparameter sweep with wandb, on more than one GPU.** `hadrsim-train` +
+   `experiments/sweep.yaml` are ready; nothing has been swept but reward weights. Five
    seeds per point — peaks ranged 19–45% across four runs of one configuration.
    *Needs Gaby's GPUs and a wandb login.*
 3. **Find the decay.** Every run peaks by iteration 25–150 and slides toward the
@@ -49,12 +49,12 @@ Ordered by what I would do next. Each line says why, and roughly how big.
 
 ## Code
 
-12. **Legacy Rerun path.** `viz/rerun_sink.py`, `viz/mesh.py`, `viz/facade.py`,
-    `scripts/view_*.py` predate the panel and are used only by those scripts. Keep
-    (they have tests) or delete; either is fine, they cost nothing but reading time.
-13. **`sandbox/` pruning.** `city2.py`, `sweep.py`, `replicate.py`, `curriculum.py`
-    are superseded by `train.py` / `final_run.py`. Delete once their numbers are in
-    the findings (they are).
+12. **Known simulator gaps.** Drones can fly through buildings (`Env._fly` never
+    tests `solid_top`); wind pushes fire and smoke but not the airframe. Both are
+    small to fix and both move the golden numbers, so do them deliberately.
+13. **Research decisions, one at a time, with evidence.** Which of the 15 reward
+    terms stay (`configs/reward/`); three drone tiers or two; keep the crowd
+    `Runner`; which two checkpoints ship (do not delete any before deciding).
 14. **Drone count.** Two, hardcoded in the network, the reward and the renderer; the
     panel's "Drones" box is inert. The paper's whole argument is the two-role
     asymmetry, so leave it unless the research question changes.
@@ -63,7 +63,8 @@ Ordered by what I would do next. Each line says why, and roughly how big.
 
 ## Infrastructure
 
-16. **Push the repo.** Six commits, all local. *One command, yours.*
+16. **Push the repo.** ~20 commits, all local; CI (`.github/workflows/ci.yml`)
+    runs on the first push. *One command, yours.*
 17. **`nvidia-*` in the apt blacklist**, so unattended-upgrades cannot break CUDA
     mid-run again. *Your call.*
 18. **Overpass.** Only the ten presets at 100 m radius are cached; any other radius
@@ -73,5 +74,9 @@ Ordered by what I would do next. Each line says why, and roughly how big.
 
 - Reproducibility across processes (`Rng.fork` used Python's salted hash).
 - Golden regression test; one evaluator; policy seam with scripted baselines and
-  checkpoint manifests; `TrainEnv` split into named pieces; panel exposes physics
-  and detector; wandb-ready training entry; block-wise anneal fixed. 209 tests.
+  checkpoint manifests; `Env` split into named pieces; panel exposes physics and
+  detector; block-wise anneal fixed.
+- Oct cleanup: `env.py` / `train.py` / `eval.py` as the three top-level modules;
+  `sandbox/` → `experiments/` with only research scripts left; reward terms split
+  paper/ours with weights in yaml; dead code out; packaged with four commands,
+  README and CI. 183 tests, golden unchanged throughout.

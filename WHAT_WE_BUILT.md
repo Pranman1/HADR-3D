@@ -79,7 +79,7 @@ function; the composer records every term's contribution separately. The paper's
 terms are kept with its weights; ours are added on top. Rewards may only read what
 the drones *believe* from their detections, never the true state.
 
-**`hadrsim/envs/train.py` — training.** Thousands of episodes stepping together.
+**`hadrsim/env.py` — the gym.** Thousands of episodes stepping together.
 Forty origin/destination pairs and four fire origins per city, as in the paper.
 Finished episodes freeze. Curriculum by launch distance.
 
@@ -98,7 +98,7 @@ environment, so what you watch is the world they trained in.
 **`hadrsim/eval.py` — the one evaluation loop.** Every script that reports a
 number calls `evaluate(env, policy)`; it returns capture, seen, reached, harmed,
 time-to-capture, time-to-first-sighting, time-in-view and the per-term reward sums.
-Four diverging copies used to live in `sandbox/`.
+Four diverging copies used to live in the experiment scripts.
 
 **`hadrsim/policy/base.py` — the policy seam.** A policy is anything with
 `act(obs, state, deterministic)`. Three scripted baselines ship: `hover` (the floor),
@@ -107,10 +107,11 @@ wherever the team last saw the person). `Learned.load()` reads a checkpoint whos
 manifest says what network it is; `load(name_or_path)` returns any of them, so the
 panel, the evaluator and every script are indifferent to which.
 
-**`sandbox/` — experiments.** `train.py` (one entry point, every hyperparameter a
-flag, wandb-ready; `sweep.yaml` beside it), `paper_parity.py` (the control),
-`reward_sweep.py`, `final_run.py`, `generalise.py` (score a policy across every
-city), `watch.py` (any policy → video). `tests/test_golden.py` is the bit-for-bit
+**Commands.** `hadrsim-train` (every hyperparameter a flag, `--reward` picks a
+yaml weight table, `--wandb` optional), `hadrsim-eval` (a policy on every cached city
+against its own floor), `hadrsim-watch` (any policy → video), `hadrsim-panel`.
+`experiments/` keeps the research scripts: `paper_parity.py` (the control),
+`reward_sweep.py`, `sweep.yaml`. `tests/test_golden.py` is the bit-for-bit
 regression guard; `PENDING.md` is the ordered list of what is not done.
 
 ---

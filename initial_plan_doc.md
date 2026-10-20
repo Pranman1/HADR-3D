@@ -90,10 +90,11 @@ has never had to handle uncertainty.
   the spread probability (0.05 → 0.01) to compensate. It also spreads *through*
   buildings — the validity check tests map bounds only.
 - **The fire is not reproducible.** Spread draws from the unseeded global numpy RNG.
-- **Detection and reward are separately wired to the truth.** The reward functions read
-  ground-truth visibility on their own, so making the drone's *vision* worse would leave
-  the policy quietly getting the answer through the reward channel. This is the single
-  most important thing to design out, and section 6 does.
+- **Detection and reward are separately wired to the same perfect window.** The reward
+  functions read the evader's window-masked position (−1 when no window has it) — the
+  output of a perfect detector, not raw truth — so a detector that could miss would
+  have to be wired into the reward as well as the observation. Section 6 makes the
+  reward read the observation by construction.
 
 ---
 
@@ -393,8 +394,9 @@ has to go and look at, which is the same problem the paper poses about the perso
 
 > **The scoring may only read what the policy reads.**
 
-In the current code the reward functions independently look up ground truth, so degrading
-vision would leave the policy still getting the answer through the back door. Making the
+In the current code the reward functions independently look up the window-masked position,
+so a degraded detector would have to be threaded through both paths or the policy would
+still get the answer through the back door. Making the
 scoring read the same observation the policy reads closes that by construction rather
 than by remembering to.
 
@@ -1021,7 +1023,7 @@ Every deliberate difference, why, and what it costs. This is the table to hand G
 | 3 | drones teleport between cells | X500 V2 quadrotor + PX4 autopilot | a real drone has inertia, tilts to move, and its camera tilts with it | 3× compute at full fidelity; §8.6 measures whether it matters |
 | 4 | policy outputs a waypoint | policy outputs a velocity setpoint | it is the native PX4 offboard message, so sim-to-real needs no translation | policy can no longer fly aggressively — deliberate |
 | 5 | detection binary and noiseless inside a window | range falloff, misses, false alarms, confidence, staleness | this is the actual research contribution | policy must handle uncertainty; harder to train |
-| 6 | reward reads ground truth independently of the observation | reward may only read what the policy reads | otherwise degrading vision changes nothing, because the answer arrives via the reward | rewards must be rewritten, not ported |
+| 6 | reward reads the evader's window-masked position (−1 when unseen), i.e. a perfect detector's output | reward may only read what the policy reads | otherwise degrading vision changes nothing, because the answer arrives via the reward | rewards must be rewritten, not ported |
 | 6b | LLR "detects" inside a 5×5 window (2.5 m), so detection *is* closeness | detection (45 m ahead) and closeness (`apparent_size`: the person's height over distance, only while in view) are paid separately | with a long-range sensor, paying for detection alone paid for watching from across the street: 97% seen, 18% captured | one more term; on hardware it is the bounding-box height |
 | 7 | fire never burns out, spreads through buildings, unseeded RNG | fuel, moisture, burnout, wind direction, buildings block, seeded | the current fire eventually fills the map and is irreproducible | more parameters to set |
 | 8 | no smoke | 3D smoke plume, blocks the high drone, slows the person | smoke occlusion is the paper's premise, currently only asserted | a new subsystem |

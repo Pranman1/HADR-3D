@@ -46,7 +46,7 @@ not seeded, so no run reproduces.
 the Trivedi–Rao panic equation; the paper's reward terms with the paper's weights;
 PPO + LSTM; the paper's four metrics; the paper's fire-is-a-wall rule for the
 evacuee; a `kinematic` drone tier that *is* the paper's teleporting drone; and a
-25 m paper-grid scenario (`scenarios/paper_parity.yaml`) for a like-for-like control.
+25 m paper-grid scenario (`experiments/paper_parity.py`) for a like-for-like control.
 
 **Added:**
 
@@ -76,8 +76,8 @@ randomisation, generated from the map. `Scenario.terrain()` builds (and caches) 
 `Terrain`: heights, canopies, walkable, flyable, fuel — from `world/osm.py` for a
 city or `world/terrain.py` for the paper's yaml.
 
-### The training environment holds the batch
-`envs/train.py` → `TrainEnv(scenario, batch, fidelity, detector, weights)`. It owns
+### The environment holds the batch
+`env.py` → `Env(scenario, batch, fidelity, detector, weights)`. It owns
 one `Fire`, one `Smoke`, one `Wind`, one `Human`, two `Drone`s, two `Camera`s, two
 detectors and a reward `Composer`, each sized `(batch, …)`.
 
@@ -122,7 +122,7 @@ reward per term. `policy/base.py` → `load(name_or_path)` gives a trained netwo
 a scripted baseline (`hover`, `lawnmower`, `last_sighting`).
 
 ### Watching
-`runner.py` → `PolicyRunner` wraps a `TrainEnv` of batch 1 and a policy;
+`runner.py` → `PolicyRunner` wraps an `Env` of batch 1 and a policy;
 `gui/server.py` serves the panel and streams frames; `gui/index.html` draws the plan
 view and `gui/scene3d.js` the 3D one. `viz/render.py` writes mp4s.
 
@@ -175,18 +175,21 @@ view and `gui/scene3d.js` the 3D one. `viz/render.py` writes mp4s.
   and `geometric` detectors; `make(name, camera)`.
 
 ### `hadrsim/reward` — what the drones are paid for
-- **`terms.py`** — `View` (everything a term may read: beliefs, not truth) and one
-  function per term: the paper's (`capture`, `evacuee_in_*_fov`, `proximity`,
-  `goal_progress`, `role_coordination`, `time_penalty`) and ours (`reached_safety`,
-  `search_coverage`, `fire_proximity`, `control_effort`, `first_sight`, `coverage`,
-  `evacuee_harmed`, `apparent_size`). The bug history is in the docstrings.
-- **`compose.py`** — `DEFAULT` weights; `Composer` sums terms and keeps each term's
-  contribution (`Reward.parts`) — the audit tool that found the reward bugs.
+- **`terms.py`** — `View` (everything a term may read: beliefs, not truth) and the
+  `@term` registry.
+- **`paper.py`** — the terms with a counterpart in the paper: `capture` (l3),
+  `evacuee_in_hlr_fov` (l0), `evacuee_in_llr_fov` (l1), `proximity` (l2),
+  `role_coordination` (l7), `time_penalty` (l6), `fire_proximity`.
+- **`ours.py`** — what a city block needed: `reached_safety`, `goal_progress`,
+  `search_coverage`, `first_sight`, `coverage`, `apparent_size`, `evacuee_harmed`,
+  `control_effort`. The bug history behind them is `OVERNIGHT_FINDINGS.md` §1 and §6.
+- **`compose.py`** — `load_weights(name)` reads `configs/reward/<name>.yaml`;
+  `Composer` sums terms and keeps each term's contribution (`Reward.parts`).
 
-### `hadrsim/envs` — training
-- **`train.py`** — `TrainEnv`: `ALT_BANDS` per role; `reset` → `_draw_episodes`,
-  `_launch_drones`; `_detect`, `_belief` (last-known-position memory), `observe`,
-  `_sweep` (searched map with decay), `_raster`; `step` → `_fly`, `_settle`; `_view`.
+### `hadrsim/configs` — numbers that are not code
+- **`reward/default.yaml`** — the shipped balance. **`reward/paper.yaml`** — only
+  the paper's terms, for parity runs and ablations. `--reward NAME` on
+  `hadrsim-train`, `Env(weights="NAME")`, or a path to your own file.
 
 ### `hadrsim/policy` — learning and the policy seam
 - **`encoders.py`** — `FlatEncoder`, `ConvEncoder`, `make()`.
@@ -196,31 +199,36 @@ view and `gui/scene3d.js` the 3D one. `viz/render.py` writes mp4s.
   `Learned.load()` (manifest-checked); `load(name_or_path)`.
 
 ### top level
+- **`env.py`** — `Env`, the gym: `ALT_BANDS` per role; `reset` → `_draw_episodes`,
+  `_launch_drones`; `_detect`, `_belief` (last-known-position memory), `observe`,
+  `_sweep` (searched map with decay), `_raster`; `step` → `_fly`, `_settle`; `_view`.
+  No learning in it.
+- **`train.py`** — `train()` and `hadrsim-train`: PPO blocks with evaluation every
+  25 iterations, keep-best, scripted floors printed beside the result, optional
+  launch-distance curriculum, `--wandb`, every hyperparameter a flag.
 - **`scenario.py`** — `Scenario`, `PRESETS` (ten cities pinned to coordinates),
   `autoplace()`, `_variety()` (routes and fire origins), yaml/dict I/O.
-- **`eval.py`** — `Metrics`, `evaluate()`, `baselines()`.
+- **`eval.py`** — `Metrics`, `evaluate()`; `hadrsim-eval` scores a policy on one
+  city or every cached one against its own floor.
 - **`runner.py`** — `Snapshot`; `Runner` (a crowd, no drones — the panel's
   people-only mode); `PolicyRunner` (one person, two drones, any policy).
-- **`viz/render.py`** — `Recorder`: frames to mp4/gif.
+- **`viz/render.py`** — `Recorder`: frames to mp4/gif; `hadrsim-watch`.
 - **`gui/server.py`** — FastAPI + WebSocket: `/`, `/presets` (cached cities only),
   `/policies` (baselines + checkpoints), `/live` (build / play / step / reset /
-  speed; real-time pacing); map, fire and height encoding.
+  speed; real-time pacing). **`gui/encode.py`** — map PNG, run-length heights,
+  fire/smoke overlay, flames, wind: what goes down the wire.
 - **`gui/index.html`** — the form, the 2D canvases, frame tweening, 2D/3D toggle.
 - **`gui/scene3d.js`** — the 3D scene: buildings, X500 airframes at true attitude,
   camera cones along the real axes, flames, wind-leaning smoke, shadows.
 
-### `sandbox/` — experiments (not library code)
-- **`train.py`** — one entry point; every hyperparameter a flag; `--wandb`;
-  keep-best; floors printed beside the result. **`sweep.yaml`** — wandb sweep.
+### `experiments/` — research scripts (not library code)
 - **`paper_parity.py`** — the control: the paper's setup at the paper's scale
   (`--pairs 1|40`).
-- **`reward_sweep.py`** — the seven reward balances.
-- **`final_run.py`** — two-seed long run with evaluation every 25 iterations.
-- **`generalise.py`** — a policy scored on every cached city against its own floor.
-- **`watch.py`** — any policy, any city → mp4.
+- **`reward_sweep.py`** — the seven reward balances, through `train()`.
+- **`sweep.yaml`** — a wandb sweep over `hadrsim-train`'s flags.
 
 ### `tools/shot3d.py` — headless screenshots of the panel (Playwright).
-### `tests/` — 184 tests; `test_golden.py` is the bit-for-bit refactor guard.
+### `tests/` — 183 tests; `test_golden.py` is the bit-for-bit refactor guard. CI runs them on CPU.
 ### documents
 `initial_plan_doc.md` (design; §13 changes-from-paper table), `OVERNIGHT_FINDINGS.md`
 (what was found, section by section, with measurements), `WHAT_WE_BUILT.md`
@@ -234,10 +242,10 @@ view and `gui/scene3d.js` the 3D one. `viz/render.py` writes mp4s.
 2. `world/terrain.py`, `world/fire.py`, `world/nav.py`; skim `osm.py`.
 3. `agents/human.py`, `agents/drone.py`, `agents/autopilot.py`.
 4. `sensing/fov.py`, `sensing/occlusion.py`, `sensing/detector.py`.
-5. `reward/terms.py`, `reward/compose.py` — read every docstring.
-6. `envs/train.py` — one decision, start to finish.
+5. `reward/terms.py`, `reward/paper.py`, `reward/ours.py`, `configs/reward/`.
+6. `env.py` — one decision, start to finish.
 7. `policy/encoders.py`, `policy/ppo.py`, `policy/base.py`.
-8. `eval.py`, `scenario.py`, `runner.py`; skim the gui.
+8. `eval.py`, `train.py`, `scenario.py`, `runner.py`; skim the gui.
 9. `OVERNIGHT_FINDINGS.md` §1–12, then `PENDING.md`.
 
 You are done when you can draw one decision on a whiteboard and answer two
