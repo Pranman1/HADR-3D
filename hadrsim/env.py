@@ -196,6 +196,7 @@ class Env:
                 [theta.cos(), theta.sin()], -1)
             on_map = ((cand[..., 0] > margin) & (cand[..., 0] < w_m - margin)
                       & (cand[..., 1] > margin) & (cand[..., 1] < h_m - margin))
+            on_map &= self._roof_at(cand.clamp(0, max(w_m, h_m))) == 0      # and not inside a building
             # The first bearing that lands on the map; if none does, the last one,
             # clamped -- which only happens for a start hard against a corner.
             first = torch.where(on_map.any(0), on_map.float().argmax(0),
@@ -403,9 +404,11 @@ class Env:
 
         for _ in range(self.clock.substeps):
             for i, drone in enumerate(self.drones):
+                before = drone.pos.clone()
                 drone.step(actions[:, i], dt)
                 lo, hi = self.ALT_BANDS[i]
                 drone.confine(w_m, h_m, lo, hi)
+                self._collide(drone, before)
             self.human.integrate(
                 self.crowd.step(self.human.pos, self.human.vel, self._want, dt), dt)
             self.wind.step(dt, self.rng_wind)
@@ -419,6 +422,27 @@ class Env:
             reach |= ((llr_drone.pos[:, :2] - self.human.pos).norm(dim=-1)
                       < self.capture_radius)
         return reach
+
+    def _roof_at(self, xy: torch.Tensor) -> torch.Tensor:
+        """Building height under each (..., 2) point in metres; 0 on open ground."""
+        W, H = self.terrain.shape
+        cx = (xy[..., 0] / self.cell).long().clamp(0, W - 1)
+        cy = (xy[..., 1] / self.cell).long().clamp(0, H - 1)
+        return self.terrain.solid_top[cx, cy]
+
+    def _collide(self, drone, before: torch.Tensor) -> None:
+        """Buildings are solid.  A move into a wall is refused and the speed into it
+        lost; a descent onto a roof stops on the roof.  Tested every physics tick,
+        like capture, so a drone cannot cross a wall between two checks."""
+        hit = self._roof_at(drone.pos[:, :2]) > drone.pos[:, 2]
+        if not bool(hit.any()):
+            return
+        drone.pos[:, :2] = torch.where(hit[:, None], before[:, :2], drone.pos[:, :2])
+        drone.vel[:, :2] = torch.where(hit[:, None], torch.zeros_like(drone.vel[:, :2]), drone.vel[:, :2])
+        roof = self._roof_at(drone.pos[:, :2])                  # still under one: it came from above
+        on_roof = roof > drone.pos[:, 2]
+        drone.pos[:, 2] = torch.where(on_roof, roof, drone.pos[:, 2])
+        drone.vel[:, 2] = torch.where(on_roof, torch.zeros_like(drone.vel[:, 2]), drone.vel[:, 2])
 
     def _settle(self, actions, reach, running):
         """Everything that happens once per decision after the flight: smoke, the

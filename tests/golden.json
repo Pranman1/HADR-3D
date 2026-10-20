@@ -1,40 +1,40 @@
 {
   "paper": {
-    "reward_sum": 688.2926,
+    "reward_sum": 714.7278,
     "parts": {
       "capture": 0.0,
       "evacuee_in_hlr_fov": 7.5001,
       "evacuee_in_llr_fov": 0.6668,
-      "proximity": 105.2209,
-      "role_coordination": 1.5678,
+      "proximity": 109.676,
+      "role_coordination": 1.5187,
       "time_penalty": -0.24
     },
     "captured": 0,
     "reached": 0,
     "harmed": 0,
-    "drone_pos_sum": 531.865,
+    "drone_pos_sum": 525.859,
     "human_pos_sum": 164.156,
     "fire_cells": 195,
-    "obs_self_sum": 15.0604,
-    "obs_raster_sum": 13403.08
+    "obs_self_sum": 13.4511,
+    "obs_raster_sum": 13374.391
   },
   "berkeley": {
-    "reward_sum": 209.5732,
+    "reward_sum": 289.5089,
     "parts": {
       "capture": 0.0,
-      "evacuee_in_hlr_fov": 0.1997,
-      "evacuee_in_llr_fov": 0.0375,
-      "proximity": 34.9021,
-      "role_coordination": 0.0297,
+      "evacuee_in_hlr_fov": 0.2842,
+      "evacuee_in_llr_fov": 0.0789,
+      "proximity": 48.0587,
+      "role_coordination": 0.0698,
       "time_penalty": -0.24
     },
     "captured": 0,
     "reached": 0,
     "harmed": 0,
-    "drone_pos_sum": 2979.227,
+    "drone_pos_sum": 2916.235,
     "human_pos_sum": 1362.114,
     "fire_cells": 101,
-    "obs_self_sum": 16.6137,
-    "obs_raster_sum": 20327.537
+    "obs_self_sum": 16.4065,
+    "obs_raster_sum": 18740.965
   }
 }

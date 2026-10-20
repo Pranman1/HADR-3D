@@ -191,6 +191,19 @@ def test_the_two_drones_fly_at_different_altitudes():
     assert float(e.drones[0].pos[:, 2].mean()) > float(e.drones[1].pos[:, 2].mean()) + 20
 
 
+@pytest.mark.parametrize("fidelity", ["kinematic", "quadrotor"])
+def test_drones_cannot_fly_through_buildings(fidelity):
+    """Every tick, both drones are above whatever stands under them."""
+    e = Env(small(), batch=8, fidelity=fidelity)
+    e.reset()
+    assert bool((e._roof_at(e.drones[1].pos[:, :2]) == 0).all()), "launched inside a building"
+    heading = torch.tensor([1.0, 0.0, -1.0, 0.0])               # forward and down, at full command
+    for _ in range(8):
+        e.step(heading.expand(8, 2, 4))
+        for d in e.drones:
+            assert bool((e._roof_at(d.pos[:, :2]) <= d.pos[:, 2] + 1e-4).all())
+
+
 def test_the_environment_is_reproducible():
     a, b = Env(small(), batch=4), Env(small(), batch=4)
     act = torch.zeros(4, 2, 4)

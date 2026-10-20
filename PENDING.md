@@ -49,9 +49,11 @@ Ordered by what I would do next. Each line says why, and roughly how big.
 
 ## Code
 
-12. **Known simulator gaps.** Drones can fly through buildings (`Env._fly` never
-    tests `solid_top`); wind pushes fire and smoke but not the airframe. Both are
-    small to fix and both move the golden numbers, so do them deliberately.
+12. **Known simulator gap.** Wind pushes fire and smoke but not the airframe.
+    Small to fix; moves the golden numbers, so do it deliberately. (Buildings became
+    solid for the drones on 20 Oct: on Berkeley the hover floor went 7.8 → 14.1%, the
+    `last_sighting` rule 45.7 → 54.3%, the `sweep_closeness` checkpoint 48.4 → 32.0%
+    -- it was trained without walls. Every checkpoint predates this change.)
 13. **Research decisions, one at a time, with evidence.** Which of the 15 reward
     terms stay (`configs/reward/`); three drone tiers or two; keep the crowd
     `Runner`; which two checkpoints ship (do not delete any before deciding).
