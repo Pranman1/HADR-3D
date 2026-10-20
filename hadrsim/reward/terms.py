@@ -39,7 +39,6 @@ class View:
     """
 
     drone_pos: torch.Tensor        # (B, D, 3)
-    drone_vel: torch.Tensor        # (B, D, 3)
     person_pos: torch.Tensor       # (B, 3) believed
     person_seen: torch.Tensor      # (B,) bool -- has anyone got them right now
     seen_by: torch.Tensor          # (B, D) bool -- which drones can see them
@@ -47,7 +46,6 @@ class View:
     goal: torch.Tensor             # (B, 3) where safety is
     captured: torch.Tensor         # (B,) bool -- newly, this step
     was_captured: torch.Tensor     # (B,) bool -- at any point this episode
-    reached_goal: torch.Tensor     # (B,) bool
     fire_near: torch.Tensor        # (B, D) fire proximity at each drone, 0..1
     action: torch.Tensor           # (B, D, 4)
     dt: float = 0.5

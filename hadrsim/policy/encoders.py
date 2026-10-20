@@ -48,7 +48,6 @@ class FlatEncoder(nn.Module):
             nn.Linear(s.flat_dim + raster, 256), nn.ReLU(),
             nn.Linear(256, out), nn.ReLU(),
         )
-        self.out_dim = out
 
     def forward(self, obs: dict) -> torch.Tensor:
         return self.net(torch.cat([flatten_obs(obs), obs["raster"].flatten(1)], -1))
@@ -77,7 +76,6 @@ class ConvEncoder(nn.Module):
             nn.Linear(s.flat_dim + 32 * side * side, 256), nn.ReLU(),
             nn.Linear(256, out), nn.ReLU(),
         )
-        self.out_dim = out
 
     def forward(self, obs: dict) -> torch.Tensor:
         return self.net(torch.cat([flatten_obs(obs), self.conv(obs["raster"])], -1))

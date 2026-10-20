@@ -88,18 +88,6 @@ class FireParams:
     spot_range_m: float = 14.0
     spot_spread_m: float = 7.0
 
-    @classmethod
-    def paper(cls) -> "FireParams":
-        """The 2D paper's fire, for `paper_parity`.
-
-        `fire_prob=0.01` on four neighbours, no embers.  These defaults are tuned for
-        a real city block over a two-minute episode and would consume the paper's
-        entire 25 m map in seconds, which is not a bug in either -- spread rate is a
-        property of the scenario, not of the model.
-        """
-        return cls(spread_prob=0.01, spot_prob=0.0, burn_rate=0.0,
-                   wind_boost=1.0, fuel_exponent=0.0)
-
 
 class Fire:
     """Fire over a batch of environments sharing one terrain.
@@ -149,10 +137,6 @@ class Fire:
         """
         return torch.where(self.burning, (self.fuel / self.fuel0.clamp_min(1e-6)).clamp(0, 1),
                            torch.zeros_like(self.fuel))
-
-    def area_m2(self) -> torch.Tensor:
-        cell = self.terrain.cell_size_m ** 2
-        return (self.burning | self.burnt).flatten(1).sum(-1) * cell
 
     # ------------------------------------------------------------------ setup
 

@@ -54,7 +54,6 @@ OVERPASS_MIRRORS = (
     "https://overpass.private.coffee/api/interpreter",
     "https://overpass.osm.jp/api/interpreter",
 )
-OVERPASS = OVERPASS_MIRRORS[0]
 NOMINATIM = "https://nominatim.openstreetmap.org/search"
 UA = "hadrsim/0.1 (research simulator; contact via github.com/sastry-group)"
 

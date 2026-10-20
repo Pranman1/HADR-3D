@@ -35,7 +35,6 @@ class Clock:
     control_hz: float = 2.0
     fire_hz: float = 1.0
     episode_seconds: float = 120.0
-    viz_hz: float = 20.0        # how often a watcher gets a frame
 
     def __post_init__(self):
         if self.physics_hz < self.control_hz:
@@ -62,11 +61,6 @@ class Clock:
         return max(1, round(self.physics_hz / self.human_hz))
 
     @property
-    def viz_substeps(self) -> int:
-        """Physics steps per drawn frame. 5, i.e. 20 frames a second."""
-        return max(1, round(self.physics_hz / self.viz_hz))
-
-    @property
     def max_steps(self) -> int:
         """Policy decisions in one episode. 240, at the default rates.
 
@@ -74,11 +68,3 @@ class Clock:
         not comparable to it and should not be quoted as if it were.
         """
         return max(1, round(self.episode_seconds * self.control_hz))
-
-    def describe(self) -> str:
-        return (
-            f"{self.physics_hz:g} Hz physics, {self.human_hz:g} Hz human, "
-            f"{self.control_hz:g} Hz control ({self.substeps} substeps), "
-            f"{self.fire_hz:g} Hz fire, {self.episode_seconds:g} s "
-            f"= {self.max_steps} decisions"
-        )

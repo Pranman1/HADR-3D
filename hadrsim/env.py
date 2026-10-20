@@ -61,7 +61,7 @@ class Env:
     # beat doing its actual job.  It is also simply what the paper describes.
     ALT_BANDS = ((25.0, 120.0),      # HLR: high, wide, cannot intercept
                  (2.0, 15.0))        # LLR: low, narrow, the only one that can
-    ALT_MIN, ALT_MAX = 2.0, 120.0    # kept for anything asking about the airspace
+    ALT_MAX = 120.0                  # normalises altitude in the observation
 
     def __init__(self, scenario, batch: int = 256, detector: str = "oracle",
                  fidelity: str = "point_mass", weights: dict | None = None,
@@ -490,7 +490,6 @@ class Env:
                                  for d in self.drones], -1)
         return View(
             drone_pos=torch.stack([d.pos for d in self.drones], 1),
-            drone_vel=torch.stack([d.vel for d in self.drones], 1),
             person_pos=self._last_pos,
             person_seen=seen_by.any(-1),
             belief_age=self._last_age,
@@ -499,7 +498,6 @@ class Env:
             goal=goal3,
             captured=newly_captured,
             was_captured=self.captured,
-            reached_goal=self.human.reached,
             fire_near=fire_near,
             action=actions,
             dt=self.clock.control_dt,

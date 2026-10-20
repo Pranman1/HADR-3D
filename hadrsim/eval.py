@@ -84,20 +84,6 @@ def evaluate(env, policy=None, deterministic: bool = True, reset: bool = True) -
     )
 
 
-def baselines(env, n_untrained: int = 5, make_untrained=None) -> dict[str, float]:
-    """The two floors a trained number must be read against: doing nothing, and an
-    *averaged* untrained network -- a single draw ranged 3.7% to 32% by seed."""
-    out = {"do nothing": evaluate(env).capture}
-    if make_untrained is not None and n_untrained:
-        vals = []
-        for s in range(n_untrained):
-            torch.manual_seed(s)
-            vals.append(evaluate(env, make_untrained()).capture)
-        out["untrained, mean"] = sum(vals) / len(vals)
-        out["untrained, sd"] = (sum((v - out["untrained, mean"]) ** 2 for v in vals) / len(vals)) ** 0.5
-    return out
-
-
 def main(argv=None) -> None:
     """Score a policy on one city or on every cached one, each against its own floor.
     Cities are not equally hard, so the number that means anything is the gain."""

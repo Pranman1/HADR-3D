@@ -138,21 +138,9 @@ class ObsSpec:
             + self.task_dim
         )
 
-    @property
-    def raster_extent_m(self) -> float:
-        return self.raster_size * self.raster_metres_per_cell
-
 
 DEFAULT_OBS = ObsSpec()
 
-
-# ------------------------------------------------------------------- sentinel values
-
-# A detection slot that holds nothing. Confidence 0.0 is the signal; the position
-# fields are zeroed rather than set to -1, so a network cannot learn to read the
-# sentinel itself as a location.
-EMPTY_CONFIDENCE = 0.0
-MAX_DETECTION_AGE_S = 10.0  # older than this and the slot is cleared
 
 
 def validate(obs: dict, spec: ObsSpec = DEFAULT_OBS, batch: int | None = None) -> None:

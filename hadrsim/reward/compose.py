@@ -85,7 +85,3 @@ class Composer:
             parts[name] = value
             total = total + value
         return Reward(total, parts)
-
-    def without(self, *names: str) -> "Composer":
-        """The same scoring with some terms switched off. For ablations."""
-        return Composer({k: v for k, v in self.weights.items() if k not in names})

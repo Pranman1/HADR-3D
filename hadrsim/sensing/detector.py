@@ -59,10 +59,6 @@ class Detections:
     age_s: torch.Tensor         # (B, N) how stale, in seconds
     is_true: torch.Tensor       # (B, N) bool -- for scoring only, never for policies
 
-    @property
-    def any_seen(self) -> torch.Tensor:
-        return (self.confidence > 0).any(-1)
-
     @staticmethod
     def empty(batch: int, slots: int, device="cpu") -> "Detections":
         z = lambda *s: torch.zeros(*s, device=device)

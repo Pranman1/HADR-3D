@@ -31,7 +31,6 @@ def view(**over) -> View:
     b = over.pop("batch", 1)
     base = dict(
         drone_pos=torch.tensor([[[0.0, 0.0, 40.0], [5.0, 0.0, 3.0]]] * b),
-        drone_vel=torch.zeros(b, 2, 3),
         person_pos=torch.tensor([[8.0, 0.0, 0.9]] * b),
         person_seen=torch.ones(b, dtype=torch.bool),
         seen_by=torch.ones(b, 2, dtype=torch.bool),
@@ -39,7 +38,6 @@ def view(**over) -> View:
         goal=torch.tensor([[40.0, 40.0, 0.0]] * b),
         captured=torch.zeros(b, dtype=torch.bool),
         was_captured=torch.zeros(b, dtype=torch.bool),
-        reached_goal=torch.zeros(b, dtype=torch.bool),
         fire_near=torch.zeros(b, 2),
         action=torch.zeros(b, 2, 4),
     )
@@ -80,8 +78,8 @@ def test_reaching_safety_pays_only_when_the_drones_helped():
     exactly zero, because the evacuee rescues themselves most of the time early on.
     """
     one = torch.ones(1, dtype=torch.bool)
-    unaided = view(reached_goal=one, newly_reached=one)
-    led = view(reached_goal=one, newly_reached=one, was_captured=one)
+    unaided = view(newly_reached=one)
+    led = view(newly_reached=one, was_captured=one)
 
     # Checked on the term itself, not on the total: the drones in this fixture can
     # see the person, and being paid for *that* is correct.
@@ -93,7 +91,7 @@ def test_reaching_safety_pays_only_when_the_drones_helped():
 
 
 def test_outcome_rewards_are_paid_once_not_every_step_after():
-    """`reached_goal` and `harmed` latch and stay true for the rest of the episode.
+    """`reached` and `harmed` latch and stay true for the rest of the episode.
 
     A term reading the latched flag is paid again on every remaining step: measured
     at about 8,600 for a single rescue against 200 for the capture that caused it,
@@ -103,8 +101,8 @@ def test_outcome_rewards_are_paid_once_not_every_step_after():
     one = torch.ones(1, dtype=torch.bool)
     zero = torch.zeros(1, dtype=torch.bool)
 
-    arriving = view(reached_goal=one, newly_reached=one, was_captured=one)
-    still_there = view(reached_goal=one, newly_reached=zero, was_captured=one)
+    arriving = view(newly_reached=one, was_captured=one)
+    still_there = view(newly_reached=zero, was_captured=one)
     assert float(ALL["reached_safety"](arriving)[0]) > 0.0
     assert float(ALL["reached_safety"](still_there)[0]) == 0.0, "paid twice"
 
@@ -193,12 +191,6 @@ def test_coordination_rewards_a_division_of_labour():
 def test_an_unknown_term_is_refused_loudly():
     with pytest.raises(KeyError):
         Composer({"free_lunch": 1.0})
-
-
-def test_ablation_drops_terms():
-    c = Composer().without("role_coordination", "capture")
-    assert "role_coordination" not in c.weights and "capture" not in c.weights
-    assert "proximity" in c.weights
 
 
 # ---------------------------------------------------------------- environment

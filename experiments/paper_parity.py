@@ -95,7 +95,7 @@ def build(batch: int = 1024, device: str = "cuda", pairs: int = 40, **over) -> E
     # The paper's fire: four neighbours, p = 0.01, no fuel, never goes out.
     env.fire.p = FireParams(spread_prob=0.01, spot_prob=0.0, burn_rate=0.0,
                             wind_boost=1.0, fuel_exponent=0.0)
-    env.ALT_MIN, env.ALT_MAX = 2.0, 25.0
+    env.ALT_MAX = 25.0
     return env
 
 
