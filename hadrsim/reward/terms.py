@@ -10,8 +10,9 @@ Three rules, each learned the hard way (OVERNIGHT_FINDINGS.md §1, §6):
   recorded separately, so "which term paid for that?" is a lookup.
 
 `paper.py` holds the terms with a counterpart in the 2D paper (l0, l1, l2, l3, l7, the
-time decay and the fire penalty); `ours.py` the ones a real city block needed.
-Register a new term with `@term` in either file, or in your own module.
+time decay and the fire penalty), and is the default.  Add your own with `@term` in
+a .py file your weights yaml names on its `terms:` line (`experiments/city_reward.*`
+is the worked example).
 """
 
 from __future__ import annotations

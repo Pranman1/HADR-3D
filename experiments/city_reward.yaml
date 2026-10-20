@@ -1,7 +1,8 @@
-# The shipped balance, by what each term is *worth over an episode*, not by how the
-# numbers read side by side: coverage pays a little every step, proximity only once
-# somebody is in sight, so equal-looking weights are nothing like equal.
+# Our balance for a city block (the one every checkpoint so far was trained with),
+# set by what each term is *worth over an episode*, not by how the numbers read side
+# by side: coverage pays a little every step, proximity only once somebody is in sight.
 # A negative weight makes a term a penalty; every term itself returns a magnitude.
+terms: city_reward.py        # registers the eight terms below that are not the paper's
 
 # with a counterpart in the paper (reward/paper.py)
 capture: 200.0               # l3
@@ -12,7 +13,7 @@ role_coordination: 1.0       # l7
 time_penalty: -0.02          # l6
 fire_proximity: -1.0
 
-# ours, for a city block (reward/ours.py)
+# ours (city_reward.py)
 reached_safety: 100.0
 goal_progress: 10.0
 search_coverage: 0.5

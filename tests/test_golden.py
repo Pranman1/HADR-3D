@@ -24,6 +24,7 @@ from hadrsim.env import Env
 from hadrsim.scenario import Scenario, autoplace
 
 GOLDEN = pathlib.Path(__file__).with_name("golden.json")
+CITY_REWARD = str(pathlib.Path(__file__).parents[1] / "experiments" / "city_reward.yaml")   # recorded with our reward
 STEPS, BATCH = 12, 6
 
 
@@ -39,7 +40,7 @@ def signature() -> dict:
     out = {}
     for name, sc, kw in _scenarios():
         torch.manual_seed(0)
-        env = Env(autoplace(sc), batch=BATCH, device="cpu", **kw)
+        env = Env(autoplace(sc), batch=BATCH, device="cpu", weights=CITY_REWARD, **kw)
         env.launch_offset_m = 25.0
         obs = env.reset()
         g = torch.Generator().manual_seed(11)

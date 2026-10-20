@@ -31,7 +31,7 @@ CURRICULUM = dict(promote_at=40.0, step_m=15.0, max_m=110.0)   # capture % that 
 
 def train(city="Downtown Berkeley", radius=100.0, seconds=120.0, launch=25.0,
           fidelity="quadrotor", detector="geometric", encoder="conv", batch=1024,
-          iters=300, seed=0, reward="default", weights=None, ppo: PPOConfig | None = None,
+          iters=300, seed=0, reward="paper", weights=None, ppo: PPOConfig | None = None,
           eval_every=25, eval_batch=256, curriculum=False, tag=None,
           out="checkpoints", device="cuda", wandb_run=None) -> dict:
     """One training run. Returns {best, curve, floors, tag}; checkpoints land in `out`."""
@@ -101,7 +101,7 @@ def main(argv=None) -> None:
     p.add_argument("--eval-batch", type=int, default=256)
     for k, v in PPOConfig().__dict__.items():                 # lr, gamma, clip, entropy, ...
         p.add_argument(f"--{k.replace('_', '-')}", type=type(v), default=v)
-    p.add_argument("--reward", default="default", help="a table in configs/reward/, or a yaml path")
+    p.add_argument("--reward", default="paper", help="a table in configs/reward/, or a yaml path")
     p.add_argument("--weight", nargs=2, action="append", metavar=("TERM", "VALUE"), default=[],
                    help="override one weight of that table, e.g. --weight proximity 0")
     p.add_argument("--wandb", default=None, help="project name; omit to stay offline")

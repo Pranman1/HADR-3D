@@ -11,6 +11,8 @@ check that the policy is any good; it checks that gradients flow and reward move
 so that a broken pipeline fails here rather than after an overnight run.
 """
 
+import pathlib
+
 import pytest
 import torch
 
@@ -18,6 +20,9 @@ from hadrsim.core import spec
 from hadrsim.env import Env
 from hadrsim.reward.compose import Composer, load_weights
 from hadrsim.reward.terms import TERMS, View
+
+CITY = str(pathlib.Path(__file__).parents[1] / "experiments" / "city_reward.yaml")
+CITY_W = load_weights(CITY)          # also registers our eight terms
 from hadrsim.scenario import Scenario
 
 
@@ -63,11 +68,11 @@ def test_penalties_are_penalties():
     decides whether that is wanted.
     """
     for name in ("fire_proximity", "control_effort", "time_penalty"):
-        assert load_weights()[name] < 0, f"{name} should be weighted negative"
+        assert CITY_W[name] < 0, f"{name} should be weighted negative"
         assert float(TERMS[name](view())[0]) >= 0, f"{name} should return a magnitude"
 
-    calm = Composer()(view(fire_near=torch.zeros(1, 2))).total
-    burning = Composer()(view(fire_near=torch.ones(1, 2))).total
+    calm = Composer(CITY_W)(view(fire_near=torch.zeros(1, 2))).total
+    burning = Composer(CITY_W)(view(fire_near=torch.ones(1, 2))).total
     assert float(burning) < float(calm), "flying into a fire must cost something"
 
 
@@ -86,7 +91,7 @@ def test_reaching_safety_pays_only_when_the_drones_helped():
     assert float(TERMS["reached_safety"](unaided)[0]) == 0.0, "self-rescue paid out"
     assert float(TERMS["reached_safety"](led)[0]) > 0.0
 
-    gain = float(Composer()(led).total) - float(Composer()(unaided).total)
+    gain = float(Composer(CITY_W)(led).total) - float(Composer(CITY_W)(unaided).total)
     assert gain > 50.0, "an actual rescue should be worth a great deal more"
 
 

@@ -180,16 +180,13 @@ view and `gui/scene3d.js` the 3D one. `viz/render.py` writes mp4s.
 - **`paper.py`** — the terms with a counterpart in the paper: `capture` (l3),
   `evacuee_in_hlr_fov` (l0), `evacuee_in_llr_fov` (l1), `proximity` (l2),
   `role_coordination` (l7), `time_penalty` (l6), `fire_proximity`.
-- **`ours.py`** — what a city block needed: `reached_safety`, `goal_progress`,
-  `search_coverage`, `first_sight`, `coverage`, `apparent_size`, `evacuee_harmed`,
-  `control_effort`. The bug history behind them is `OVERNIGHT_FINDINGS.md` §1 and §6.
-- **`compose.py`** — `load_weights(name)` reads `configs/reward/<name>.yaml`;
-  `Composer` sums terms and keeps each term's contribution (`Reward.parts`).
+- **`compose.py`** — `load_weights(name_or_path)` reads a yaml table; a `terms:`
+  line in it names a .py whose `@term` functions get registered. `Composer` sums
+  terms and keeps each term's contribution (`Reward.parts`).
 
 ### `hadrsim/configs` — numbers that are not code
-- **`reward/default.yaml`** — the shipped balance. **`reward/paper.yaml`** — only
-  the paper's terms, for parity runs and ablations. `--reward NAME` on
-  `hadrsim-train`, `Env(weights="NAME")`, or a path to your own file.
+- **`reward/paper.yaml`** — the default: the paper's terms only. Your own balance is
+  a yaml path on `hadrsim-train --reward` or `Env(weights=...)`.
 
 ### `hadrsim/policy` — learning and the policy seam
 - **`encoders.py`** — `FlatEncoder`, `ConvEncoder`, `make()`.
@@ -221,7 +218,11 @@ view and `gui/scene3d.js` the 3D one. `viz/render.py` writes mp4s.
 - **`gui/scene3d.js`** — the 3D scene: buildings, X500 airframes at true attitude,
   camera cones along the real axes, flames, wind-leaning smoke, shadows.
 
-### `experiments/` — research scripts (not library code)
+### `experiments/` — our research on top of the tool (not library code)
+- **`city_reward.py` + `city_reward.yaml`** — the eight terms a city block needed
+  (`reached_safety`, `goal_progress`, `search_coverage`, `first_sight`, `coverage`,
+  `apparent_size`, `evacuee_harmed`, `control_effort`) and the balance every
+  checkpoint so far was trained with. Bug history: `OVERNIGHT_FINDINGS.md` §1, §6.
 - **`paper_parity.py`** — the control: the paper's setup at the paper's scale
   (`--pairs 1|40`).
 - **`reward_sweep.py`** — the seven reward balances, through `train()`.
@@ -242,7 +243,7 @@ view and `gui/scene3d.js` the 3D one. `viz/render.py` writes mp4s.
 2. `world/terrain.py`, `world/fire.py`, `world/nav.py`; skim `osm.py`.
 3. `agents/human.py`, `agents/drone.py`, `agents/autopilot.py`.
 4. `sensing/fov.py`, `sensing/occlusion.py`, `sensing/detector.py`.
-5. `reward/terms.py`, `reward/paper.py`, `reward/ours.py`, `configs/reward/`.
+5. `reward/terms.py`, `reward/paper.py`, `configs/reward/`, then `experiments/city_reward.*`.
 6. `env.py` — one decision, start to finish.
 7. `policy/encoders.py`, `policy/ppo.py`, `policy/base.py`.
 8. `eval.py`, `train.py`, `scenario.py`, `runner.py`; skim the gui.

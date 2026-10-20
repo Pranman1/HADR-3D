@@ -1,4 +1,8 @@
-"""Terms the paper did not need and a real city block does.
+"""Our reward for a real city block: eight terms the paper did not need.
+
+Not part of the tool.  `city_reward.yaml` beside this file names this module, so
+`hadrsim-train --reward experiments/city_reward.yaml` registers these terms and
+uses that balance; the tool's own default is the paper's reward.
 
 On the paper's 25 m grid the evacuee is in view from the first step and capture ends
 the episode.  On a city block finding them is the whole problem, detection from 45 m

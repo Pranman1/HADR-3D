@@ -25,6 +25,7 @@ be right.
 """
 
 import math
+import pathlib
 import sys
 
 import torch
@@ -55,7 +56,8 @@ HLR_CAM = Camera(fov_deg=2 * math.degrees(math.atan2(4.5, 12.0)),
 LLR_CAM = Camera(fov_deg=2 * math.degrees(math.atan2(2.5, 3.0)),
                  range_m=6.0, pitch_deg=25.0, kind="forward")
 
-# configs/reward/paper.yaml, plus goal_progress as the earlier parity runs had it.
+# The paper's terms, plus goal_progress (ours) as the earlier parity runs had it.
+load_weights(str(pathlib.Path(__file__).with_name("city_reward.yaml")))   # registers goal_progress
 PAPER_WEIGHTS = {**load_weights("paper"), "goal_progress": 10.0}
 
 

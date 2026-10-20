@@ -9,6 +9,8 @@ import sys
 
 from hadrsim.train import train
 
+CITY = "experiments/city_reward.yaml"
+
 VARIANTS = {
     "as shipped": {},
     "quiet proximity": {"proximity": 5.0},
@@ -17,14 +19,14 @@ VARIANTS = {
                      "evacuee_in_hlr_fov": 0.2, "evacuee_in_llr_fov": 0.4},
     "closeness": {"apparent_size": 20.0, "proximity": 5.0},
     "closeness only": {"apparent_size": 20.0, "proximity": 0.0},
-    "paper only": "paper",                 # configs/reward/paper.yaml, nothing of ours
+    "paper only": "paper",                 # the tool's default: the paper's terms, nothing of ours
 }
 
 if __name__ == "__main__":
     iters = int(sys.argv[1]) if len(sys.argv) > 1 else 150
     results = {}
     for name, weights in VARIANTS.items():
-        table = weights if isinstance(weights, str) else "default"
+        table = weights if isinstance(weights, str) else CITY
         r = train(iters=iters, reward=table, weights=None if isinstance(weights, str) else weights,
                   tag="sweep_" + name.replace(" ", "_"))
         results[name] = r["best"] - r["floors"]["hover"]
