@@ -14,7 +14,8 @@ Three detectors, one signature, so swapping them is a scenario edit:
     geometric    field of view and line of sight, then: detection probability falling
                  with range and smoke, position error growing with range, false
                  alarms from clutter, and confidence reported honestly.
-    learned      a frozen CNN over rendered images.  Same output type. Not yet built.
+    pixel        a small CNN over a rendered camera image (`sensing/pixel.py`).  Same
+                 output type; the place a real detector plugs in.
 
 **Everything returns the same `Detections`**, carrying confidence and age.  The
 oracle simply reports confidence one and age zero.  That is what turns "make
@@ -83,7 +84,7 @@ class OracleDetector:
         self.slots = slots
 
     def __call__(self, terrain, drone, targets, target_vel=None,
-                 smoke=None, rng: Rng | None = None, env=None) -> Detections:
+                 smoke=None, rng: Rng | None = None, env=None, fire=None) -> Detections:
         batch, n = targets.shape[:2]
         det = Detections.empty(batch, self.slots, targets.device)
 
@@ -128,7 +129,7 @@ class GeometricDetector(OracleDetector):
         self.min_confidence = min_confidence
 
     def __call__(self, terrain, drone, targets, target_vel=None,
-                 smoke=None, rng: Rng | None = None, env=None) -> Detections:
+                 smoke=None, rng: Rng | None = None, env=None, fire=None) -> Detections:
         if rng is None:
             raise ValueError("a detector that can be wrong needs a generator passed in")
         batch, n = targets.shape[:2]
@@ -203,4 +204,7 @@ def make(kind: str, camera: fov_mod.Camera, **kwargs):
         return OracleDetector(camera, **kwargs)
     if kind == "geometric":
         return GeometricDetector(camera, **kwargs)
-    raise ValueError(f"no detector {kind!r} (learned arrives at step 5)")
+    if kind == "pixel":
+        from hadrsim.sensing.pixel import PixelDetector
+        return PixelDetector(camera, **kwargs)
+    raise ValueError(f"no detector {kind!r}: oracle, geometric or pixel")

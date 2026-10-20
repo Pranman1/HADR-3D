@@ -19,7 +19,7 @@ import torch
 from hadrsim.agents import airframes as af
 from hadrsim.agents.drone import Drone
 from hadrsim.core.rng import Rng
-from hadrsim.sensing import detector, fov, occlusion
+from hadrsim.sensing import camera, detector, fov, occlusion
 from hadrsim.world import terrain as terr
 
 
@@ -293,6 +293,79 @@ def test_a_detector_that_can_be_wrong_needs_a_generator():
         detector.make("geometric", fov.DOWNWARD)(OpenGround(), drone_at(40, 40, 20), at(40, 40))
 
 
-def test_the_learned_detector_is_honestly_absent():
-    with pytest.raises(ValueError, match="step 5"):
+def test_an_unknown_detector_is_refused():
+    with pytest.raises(ValueError, match="oracle, geometric or pixel"):
         detector.make("learned", fov.DOWNWARD)
+
+
+def test_the_pixel_detector_is_a_detector_not_an_oracle():
+    """On real city frames it must find a fair share of the people who are visible,
+    and must not report people in most frames where nobody is.  Weak on purpose:
+    the bar is "works and is imperfect", not a benchmark."""
+    from hadrsim.env import Env
+    from hadrsim.scenario import Scenario, autoplace
+    from hadrsim.sensing import pixel
+    if not pixel.WEIGHTS.exists():
+        pytest.skip("pixel detector not trained")
+    torch.manual_seed(0)
+    env = Env(autoplace(Scenario.preset("Downtown Berkeley", radius_m=100.0, cell_size_m=2.0, seed=1)),
+              batch=96, detector="oracle", fidelity="point_mass")
+    env.launch_offset_m = 12.0
+    env.reset()
+    found, truth = [], []
+    for camera_, drone in zip(env.cameras, env.drones):
+        det = detector.make("pixel", camera_)
+        target = torch.cat([env.human.pos, torch.full((env.batch, 1), 0.9)], -1)[:, None]
+        out = det(env.terrain, drone, target, smoke=env.smoke, env=torch.arange(env.batch), fire=env.fire)
+        seen, _, _ = fov.in_view(camera_, drone.pos, drone.quat, target)
+        clear, _ = occlusion.visible(env.terrain, drone.pos, target, env.smoke, torch.arange(env.batch))
+        found.append(out.confidence[:, 0] > 0); truth.append((seen & clear)[:, 0])
+    found, truth = torch.cat(found), torch.cat(truth)
+    recall = float((found & truth).sum() / truth.sum().clamp_min(1))
+    false_alarm = float((found & ~truth).sum() / (~truth).sum().clamp_min(1))
+    assert truth.any(), "fixture problem: nobody was ever visible"
+    assert 0.2 < recall < 1.0, f"recall {recall:.2f}"
+    assert false_alarm < 0.4, f"false alarm {false_alarm:.2f}"
+
+
+# ---------------------------------------------------------------- camera image
+
+def test_the_image_has_four_channels_and_the_wall_is_in_it():
+    t = OpenGround()
+    t.solid_top[50:54, :] = 12.0                      # a wall ahead of a forward camera
+    d = drone_at(40, 40, 3)
+    img = camera.render(fov.FORWARD, d, t, n_clutter=0)
+    assert img.shape == (1, len(camera.CHANNELS), camera.RES, camera.RES)
+    building = img[0, camera.CHANNELS.index("building")]
+    assert float(building.sum()) > 0, "the wall is not in the picture"
+    assert float(img[0, 2:].sum()) == 0.0, "no fire, no smoke, nobody: those channels stay empty"
+
+
+def test_clutter_is_in_the_picture_and_is_fixed_per_map():
+    t = OpenGround()
+    d = drone_at(40, 40, 30)
+    a = camera.render(fov.DOWNWARD, d, t)
+    b = camera.render(fov.DOWNWARD, d, t)
+    assert float(a[0, -1].sum()) > 0, "a downward camera over open ground should see some clutter"
+    assert torch.equal(a, b)
+
+
+def test_a_visible_person_is_painted_where_they_project():
+    t = OpenGround()
+    d = drone_at(40, 40, 3)
+    person = torch.tensor([[52.0, 40.0, 0.9]])
+    img = camera.render(fov.FORWARD, d, t, person_pos=person, person_visible=torch.tensor([True]), n_clutter=0)
+    ch = img[0, camera.CHANNELS.index("objects")]
+    assert float(ch.sum()) > 0
+    rows, cols = ch.nonzero(as_tuple=True)
+    assert abs(float(cols.float().mean()) - camera.RES / 2) < 2, "dead ahead should be mid-frame"
+    hidden = camera.render(fov.FORWARD, d, t, person_pos=person, person_visible=torch.tensor([False]), n_clutter=0)
+    assert float(hidden[0, -1].sum()) == 0.0, "an occluded person must not be painted"
+
+
+def test_the_image_shrinks_a_far_person():
+    t = OpenGround()
+    d = drone_at(40, 40, 3)
+    near = camera.render(fov.FORWARD, d, t, person_pos=torch.tensor([[46.0, 40.0, 0.9]]), person_visible=torch.tensor([True]), n_clutter=0)
+    far = camera.render(fov.FORWARD, d, t, person_pos=torch.tensor([[75.0, 40.0, 0.9]]), person_visible=torch.tensor([True]), n_clutter=0)
+    assert float(near[0, -1].sum()) > float(far[0, -1].sum())          # at 75 m they are under a pixel: that is the point

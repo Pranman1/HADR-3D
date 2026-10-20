@@ -173,6 +173,13 @@ view and `gui/scene3d.js` the 3D one. `viz/render.py` writes mp4s.
   `visible()` with clarity.
 - **`detector.py`** — `Detections` (position, velocity, confidence, age); `oracle`
   and `geometric` detectors; `make(name, camera)`.
+- **`camera.py`** — `render()`: a 4×32×32 semantic image per drone (building, fire,
+  smoke, objects) by marching every pixel's ray; the person and seeded street
+  clutter share the objects channel, so nothing in the picture says "person".
+- **`pixel.py`** — `PixelDetector`: a small CNN over that image, trained offline by
+  `python -m hadrsim.sensing.pixel` on oracle labels; weights ship in
+  `configs/pixel_detector.pt`. `--detector pixel` anywhere. On hardware this file is
+  what a real camera and detector replace.
 
 ### `hadrsim/reward` — what the drones are paid for
 - **`terms.py`** — `View` (everything a term may read: beliefs, not truth) and the
@@ -217,6 +224,9 @@ view and `gui/scene3d.js` the 3D one. `viz/render.py` writes mp4s.
 - **`gui/index.html`** — the form, the 2D canvases, frame tweening, 2D/3D toggle.
 - **`gui/scene3d.js`** — the 3D scene: buildings, X500 airframes at true attitude,
   camera cones along the real axes, flames, wind-leaning smoke, shadows.
+- **`ros.py`** — `hadrsim-ros`: the gym at batch 1 as a ROS 2 node. Publishes each
+  drone's pose, its detection, the evacuee and the fire grid; takes `cmd_vel` per
+  drone in the body frame, scaled by the airframe limits. Optional, never in training.
 
 ### `experiments/` — our research on top of the tool (not library code)
 - **`city_reward.py` + `city_reward.yaml`** — the eight terms a city block needed

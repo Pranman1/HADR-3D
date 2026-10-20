@@ -18,6 +18,7 @@ hadrsim-panel               # control panel at http://localhost:8000
 hadrsim-train               # PPO + LSTM + CNN, Berkeley, 300 iterations
 hadrsim-eval  checkpoints/x.pt            # every cached city against its own floor
 hadrsim-watch last_sighting -o out.mp4    # any policy, any city, to video
+hadrsim-ros --ros-args -p policy:=last_sighting   # poses, detections, fire grid on /hadrsim/*
 ```
 
 ## The gym
@@ -45,12 +46,14 @@ learned number is read against.
 hadrsim/
   world/      terrain, OpenStreetMap, fire, smoke, wind, navigation
   agents/     evacuee (Trivedi-Rao panic, social force), crowd, quadrotor + autopilot
-  sensing/    cameras, ray-marched occlusion, detectors (oracle, geometric)
+  sensing/    cameras, ray-marched occlusion, detectors (oracle, geometric, pixel: a CNN
+              on a rendered 32x32 semantic camera image, camera.py / pixel.py)
   reward/     terms.py (View, @term registry) · paper.py (l0 l1 l2 l3 l7 ...) · compose.py
   configs/    reward/paper.yaml -- the default weights; your own yaml can add terms
   policy/     encoders, PPO, the policy seam and scripted baselines
   env.py      the gym       eval.py  the one evaluation loop    train.py  the learner
   runner.py   step a scenario for a viewer      gui/  the panel (FastAPI + three.js)
+  ros.py      hadrsim-ros: the gym at batch 1 on ROS 2 topics (optional, needs a sourced ROS 2)
 experiments/  our research on top of the tool: city_reward.{py,yaml} (eight extra terms
               and the balance every checkpoint so far used), paper_parity, reward_sweep, sweep.yaml
 tests/        183 tests; test_golden.py is the bit-for-bit regression guard
@@ -58,7 +61,7 @@ maps/         OpenStreetMap cache for the ten preset cities at 100 m radius
 ```
 
 Fidelity is a flag: `--fidelity kinematic|point_mass|quadrotor`, `--detector
-oracle|geometric`, `--reward paper|path.yaml`. Everything runs on CPU for
+oracle|geometric|pixel`, `--reward paper|path.yaml`. Everything runs on CPU for
 tests and small runs; training wants a GPU.
 
 ## Reading

@@ -21,12 +21,14 @@ dependencies = [
 [project.optional-dependencies]
 train = ["wandb"]
 dev = ["pytest"]
+ros = []            # rclpy comes from a sourced ROS 2 install, not from pip; this extra just documents it
 
 [project.scripts]
 hadrsim-panel = "hadrsim.gui.server:main"
 hadrsim-train = "hadrsim.train:main"
 hadrsim-eval = "hadrsim.eval:main"
 hadrsim-watch = "hadrsim.viz.render:main"
+hadrsim-ros = "hadrsim.ros:main"
 
 [build-system]
 requires = ["setuptools>=61"]
@@ -36,7 +38,7 @@ build-backend = "setuptools.build_meta"
 include = ["hadrsim*"]
 
 [tool.setuptools.package-data]
-hadrsim = ["configs/**/*.yaml", "gui/*.html", "gui/*.js"]
+hadrsim = ["configs/**/*.yaml", "configs/*.pt", "gui/*.html", "gui/*.js"]
 
 [tool.pytest.ini_options]
 # The lab box has ROS 2 on the path and its pytest plugins break collection;

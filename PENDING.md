@@ -31,10 +31,11 @@ Ordered by what I would do next. Each line says why, and roughly how big.
 
 ## Simulator
 
-7. **Pixel-level detector at the seam.** Render each camera's view (semantic, not
-   photoreal — the ray-marcher already exists), train a CNN offline to emit
-   detections and bounding-box height, plug into `detector.make`. The sim-to-real
-   piece. *~3 days.*
+7. **Pixel detector, next steps.** A minimal one exists (`sensing/camera.py`,
+   `sensing/pixel.py`, `--detector pixel`): semantic 32×32 render with clutter, CNN
+   trained on oracle labels. Not yet done: calibrate the geometric detector's miss and
+   false-alarm rates to it; train a policy against it; richer clutter and partial
+   occlusion; the camera image in the panel. *Days, as wanted.*
 8. **Comms layer.** Teammate state and shared fire map arrive instantly and perfectly
    today; the contract says they arrive through comms that can be late or lost.
    *~2 days.*

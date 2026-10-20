@@ -218,7 +218,7 @@ class Env:
         vel = torch.cat([self.human.vel, torch.zeros(self.batch, 1, device=self.device)],
                         -1)[:, None]
         env = torch.arange(self.batch, device=self.device)
-        return [d(self.terrain, drone, target, vel, self.smoke, self.rng_sense, env)
+        return [d(self.terrain, drone, target, vel, self.smoke, self.rng_sense, env, fire=self.fire)
                 for d, drone in zip(self.detectors, self.drones)]
 
     def _belief(self, detections):

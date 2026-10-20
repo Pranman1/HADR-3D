@@ -91,7 +91,7 @@ def main(argv=None) -> None:
     p.add_argument("--seconds", type=float, default=120.0)
     p.add_argument("--launch", type=float, default=25.0)
     p.add_argument("--fidelity", default="quadrotor", choices=["kinematic", "point_mass", "quadrotor"])
-    p.add_argument("--detector", default="geometric", choices=["oracle", "geometric"])
+    p.add_argument("--detector", default="geometric", choices=["oracle", "geometric", "pixel"])
     p.add_argument("--encoder", default="conv", choices=["flat", "conv"])
     p.add_argument("--batch", type=int, default=1024)
     p.add_argument("--iters", type=int, default=300)
