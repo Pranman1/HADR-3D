@@ -335,8 +335,6 @@ def load(
                 base_m=base,
                 top_m=top,
                 kind="canopy" if canopy else "solid",
-                name=tags.get("name", ""),
-                tags=tags,
             ))
 
     t = torch.as_tensor

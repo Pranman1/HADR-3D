@@ -34,8 +34,6 @@ class Footprint:
     base_m: float
     top_m: float
     kind: str              # "solid" or "canopy"
-    name: str = ""
-    tags: dict | None = None   # whatever the source knew; drives colour only
 
 
 @dataclass

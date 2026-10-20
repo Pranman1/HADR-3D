@@ -42,31 +42,13 @@ class Wind:
         return self.velocity / n[..., None]
 
 
-def make(
-    batch: int,
-    speed_mps: float = 3.0,
-    bearing_deg: float = 45.0,
-    gustiness: float = 0.25,
-    spread: float = 0.0,
-    rng: Rng | None = None,
-    device="cpu",
-) -> Wind:
-    """Wind for a batch: `mean_mps` from `bearing_deg`, with wander and gusts."""
+def make(batch: int, speed_mps: float = 3.0, bearing_deg: float = 45.0,
+         gustiness: float = 0.25, device="cpu") -> Wind:
+    """Wind for a batch: `speed_mps` from `bearing_deg`, with wander and gusts."""
     speed = torch.full((batch,), float(speed_mps), device=device)
     bearing = torch.full((batch,), math.radians(bearing_deg), device=device)
-    if spread > 0.0:
-        if rng is None:
-            raise ValueError("randomising the wind needs a generator passed in")
-        speed = speed * (1.0 + rng.uniform(batch, low=-spread, high=spread))
-        bearing = bearing + rng.uniform(batch, low=-spread, high=spread)
-
-    w = Wind(
-        velocity=torch.stack([speed * bearing.cos(), speed * bearing.sin()], dim=-1),
-        base_speed=speed,
-        base_bearing=bearing,
-        gustiness=gustiness,
-    )
-    return w
+    return Wind(velocity=torch.stack([speed * bearing.cos(), speed * bearing.sin()], dim=-1),
+                base_speed=speed, base_bearing=bearing, gustiness=gustiness)
 
 
 def still(batch: int, device="cpu") -> Wind:
