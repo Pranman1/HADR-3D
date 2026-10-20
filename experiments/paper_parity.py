@@ -34,6 +34,7 @@ sys.path.insert(0, str(__import__("pathlib").Path(__file__).resolve().parents[1]
 from hadrsim.agents.airframes import Airframe
 from hadrsim.env import Env
 from hadrsim.eval import evaluate
+from hadrsim.reward.compose import load_weights
 from hadrsim.scenario import Scenario
 from hadrsim.sensing.fov import Camera
 from hadrsim.world.fire import FireParams
@@ -54,18 +55,8 @@ HLR_CAM = Camera(fov_deg=2 * math.degrees(math.atan2(4.5, 12.0)),
 LLR_CAM = Camera(fov_deg=2 * math.degrees(math.atan2(2.5, 3.0)),
                  range_m=6.0, pitch_deg=25.0, kind="forward")
 
-# The paper's own weights (SpeedScaled: l0, l1, l2, l3 = 1, 1, 1, 10), plus a capture
-# payment. None of this project's search terms: on a 25 m block the evacuee is inside
-# a footprint from the first step, so there is nothing to search for.
-PAPER_WEIGHTS = {
-    "capture": 200.0,
-    "evacuee_in_hlr_fov": 1.0,
-    "evacuee_in_llr_fov": 1.0,
-    "proximity": 20.0,
-    "goal_progress": 10.0,
-    "role_coordination": 1.0,
-    "time_penalty": -0.02,
-}
+# configs/reward/paper.yaml, plus goal_progress as the earlier parity runs had it.
+PAPER_WEIGHTS = {**load_weights("paper"), "goal_progress": 10.0}
 
 
 # The paper draws each episode from forty origin/destination pairs and four fire

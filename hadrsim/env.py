@@ -64,7 +64,7 @@ class Env:
     ALT_MAX = 120.0                  # normalises altitude in the observation
 
     def __init__(self, scenario, batch: int = 256, detector: str = "oracle",
-                 fidelity: str = "point_mass", weights: dict | None = None,
+                 fidelity: str = "point_mass", weights: dict | str | None = None,
                  cameras=None, start_alt=None, capture_radius: float | None = None,
                  airframe=None, device="cpu"):
         """`cameras`, `start_alt`, `capture_radius` and `airframe` exist so a scenario

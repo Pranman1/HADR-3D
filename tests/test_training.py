@@ -16,8 +16,8 @@ import torch
 
 from hadrsim.core import spec
 from hadrsim.env import Env
-from hadrsim.reward.compose import DEFAULT, Composer
-from hadrsim.reward.terms import ALL, View
+from hadrsim.reward.compose import Composer, load_weights
+from hadrsim.reward.terms import TERMS, View
 from hadrsim.scenario import Scenario
 
 
@@ -49,7 +49,7 @@ def view(**over) -> View:
 
 def test_every_term_returns_one_number_per_environment():
     v = view(batch=5)
-    for name, fn in ALL.items():
+    for name, fn in TERMS.items():
         out = fn(v)
         assert out.shape == (5,), f"{name} returned {tuple(out.shape)}"
         assert torch.isfinite(out).all(), f"{name} produced a non-finite value"
@@ -63,8 +63,8 @@ def test_penalties_are_penalties():
     decides whether that is wanted.
     """
     for name in ("fire_proximity", "control_effort", "time_penalty"):
-        assert DEFAULT[name] < 0, f"{name} should be weighted negative"
-        assert float(ALL[name](view())[0]) >= 0, f"{name} should return a magnitude"
+        assert load_weights()[name] < 0, f"{name} should be weighted negative"
+        assert float(TERMS[name](view())[0]) >= 0, f"{name} should return a magnitude"
 
     calm = Composer()(view(fire_near=torch.zeros(1, 2))).total
     burning = Composer()(view(fire_near=torch.ones(1, 2))).total
@@ -83,8 +83,8 @@ def test_reaching_safety_pays_only_when_the_drones_helped():
 
     # Checked on the term itself, not on the total: the drones in this fixture can
     # see the person, and being paid for *that* is correct.
-    assert float(ALL["reached_safety"](unaided)[0]) == 0.0, "self-rescue paid out"
-    assert float(ALL["reached_safety"](led)[0]) > 0.0
+    assert float(TERMS["reached_safety"](unaided)[0]) == 0.0, "self-rescue paid out"
+    assert float(TERMS["reached_safety"](led)[0]) > 0.0
 
     gain = float(Composer()(led).total) - float(Composer()(unaided).total)
     assert gain > 50.0, "an actual rescue should be worth a great deal more"
@@ -103,13 +103,13 @@ def test_outcome_rewards_are_paid_once_not_every_step_after():
 
     arriving = view(newly_reached=one, was_captured=one)
     still_there = view(newly_reached=zero, was_captured=one)
-    assert float(ALL["reached_safety"](arriving)[0]) > 0.0
-    assert float(ALL["reached_safety"](still_there)[0]) == 0.0, "paid twice"
+    assert float(TERMS["reached_safety"](arriving)[0]) > 0.0
+    assert float(TERMS["reached_safety"](still_there)[0]) == 0.0, "paid twice"
 
     dying = view(harmed=one, newly_harmed=one)
     dead = view(harmed=one, newly_harmed=zero)
-    assert float(ALL["evacuee_harmed"](dying)[0]) == 1.0
-    assert float(ALL["evacuee_harmed"](dead)[0]) == 0.0, "charged twice"
+    assert float(TERMS["evacuee_harmed"](dying)[0]) == 1.0
+    assert float(TERMS["evacuee_harmed"](dead)[0]) == 0.0, "charged twice"
 
 
 def test_leading_someone_to_safety_pays_for_the_whole_walk():
@@ -123,10 +123,10 @@ def test_leading_someone_to_safety_pays_for_the_whole_walk():
 
     holding = view(person_pos=far, goal=torch.zeros(1, 3), was_captured=one)
     delivered = view(person_pos=near, goal=torch.zeros(1, 3), was_captured=one)
-    assert float(ALL["goal_progress"](delivered)[0]) > float(ALL["goal_progress"](holding)[0])
+    assert float(TERMS["goal_progress"](delivered)[0]) > float(TERMS["goal_progress"](holding)[0])
 
     # ...and nothing at all before anyone has been reached.
-    assert float(ALL["goal_progress"](view(person_pos=near, goal=torch.zeros(1, 3)))[0]) == 0.0
+    assert float(TERMS["goal_progress"](view(person_pos=near, goal=torch.zeros(1, 3)))[0]) == 0.0
 
 
 def test_rewards_only_read_what_the_team_believes():
@@ -147,7 +147,7 @@ def test_terms_that_need_a_sighting_pay_nothing_without_one():
                  confidence=torch.zeros(1))
     for name in ("role_coordination", "search_coverage",
                  "evacuee_in_hlr_fov", "evacuee_in_llr_fov"):
-        assert float(ALL[name](blind)[0]) == 0.0, f"{name} paid without a sighting"
+        assert float(TERMS[name](blind)[0]) == 0.0, f"{name} paid without a sighting"
 
 
 def test_closing_on_a_remembered_position_still_pays_but_decays():
@@ -161,17 +161,17 @@ def test_closing_on_a_remembered_position_still_pays_but_decays():
     blind = dict(person_seen=torch.zeros(1, dtype=torch.bool),
                  seen_by=torch.zeros(1, 2, dtype=torch.bool),
                  confidence=torch.zeros(1))
-    fresh = float(ALL["proximity"](view(belief_age=torch.tensor([0.0]), **blind))[0])
-    recent = float(ALL["proximity"](view(belief_age=torch.tensor([12.0]), **blind))[0])
-    ancient = float(ALL["proximity"](view(belief_age=torch.tensor([120.0]), **blind))[0])
+    fresh = float(TERMS["proximity"](view(belief_age=torch.tensor([0.0]), **blind))[0])
+    recent = float(TERMS["proximity"](view(belief_age=torch.tensor([12.0]), **blind))[0])
+    ancient = float(TERMS["proximity"](view(belief_age=torch.tensor([120.0]), **blind))[0])
 
     assert fresh > recent > ancient, "staleness must reduce what a memory is worth"
     assert recent == pytest.approx(fresh / 2, rel=0.05), "one half-life, half the value"
     assert ancient < 0.01, "a two-minute-old guess is worth nothing"
 
     # And it still rewards being close rather than far.
-    near = ALL["proximity"](view(belief_age=torch.tensor([0.0]), **blind))
-    far = ALL["proximity"](view(belief_age=torch.tensor([0.0]),
+    near = TERMS["proximity"](view(belief_age=torch.tensor([0.0]), **blind))
+    far = TERMS["proximity"](view(belief_age=torch.tensor([0.0]),
                                 drone_pos=torch.tensor([[[0.0, 0.0, 40.0],
                                                          [90.0, 0.0, 3.0]]]), **blind))
     assert float(near[0]) > float(far[0])
@@ -184,8 +184,8 @@ def test_coordination_rewards_a_division_of_labour():
     """
     spread = view()
     stacked = view(drone_pos=torch.tensor([[[5.0, 0.0, 40.0], [5.0, 0.0, 3.0]]]))
-    assert float(ALL["role_coordination"](spread)[0]) > \
-        float(ALL["role_coordination"](stacked)[0])
+    assert float(TERMS["role_coordination"](spread)[0]) > \
+        float(TERMS["role_coordination"](stacked)[0])
 
 
 def test_an_unknown_term_is_refused_loudly():
