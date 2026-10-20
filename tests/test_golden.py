@@ -20,7 +20,7 @@ import torch
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1]))
 
-from hadrsim.envs.train import TrainEnv
+from hadrsim.env import Env
 from hadrsim.scenario import Scenario, autoplace
 
 GOLDEN = pathlib.Path(__file__).with_name("golden.json")
@@ -39,7 +39,7 @@ def signature() -> dict:
     out = {}
     for name, sc, kw in _scenarios():
         torch.manual_seed(0)
-        env = TrainEnv(autoplace(sc), batch=BATCH, device="cpu", **kw)
+        env = Env(autoplace(sc), batch=BATCH, device="cpu", **kw)
         env.launch_offset_m = 25.0
         obs = env.reset()
         g = torch.Generator().manual_seed(11)

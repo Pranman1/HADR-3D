@@ -32,7 +32,7 @@ import torch
 sys.path.insert(0, str(__import__("pathlib").Path(__file__).resolve().parents[1]))
 
 from hadrsim.agents.airframes import Airframe
-from hadrsim.envs.train import TrainEnv
+from hadrsim.env import Env
 from hadrsim.eval import evaluate
 from hadrsim.scenario import Scenario
 from hadrsim.sensing.fov import Camera
@@ -74,7 +74,7 @@ PAPER_WEIGHTS = {
 # that way is not comparable to the published 71%, however close it lands.  Both are
 # available here because the single pair is the control that says whether the learner
 # still works, and the forty are the comparison that is allowed in a paper.
-def build(batch: int = 1024, device: str = "cuda", pairs: int = 40, **over) -> TrainEnv:
+def build(batch: int = 1024, device: str = "cuda", pairs: int = 40, **over) -> Env:
     sc = Scenario.preset("Paper grid (25 m)", cell_size_m=1.0, episode_seconds=50.0,
                          wind_mps=0.0, seed=0)
     sc.human_start = [[0.5, 0.5]]        # a corner, as in the paper's O-D pairs
@@ -86,7 +86,7 @@ def build(batch: int = 1024, device: str = "cuda", pairs: int = 40, **over) -> T
     for k, v in over.items():
         setattr(sc, k, v)
 
-    env = TrainEnv(
+    env = Env(
         sc, batch=batch, detector="oracle", fidelity="kinematic",
         weights=PAPER_WEIGHTS, cameras=[HLR_CAM, LLR_CAM],
         start_alt=[12.0, 3.0], capture_radius=1.5, airframe=PAPER_DRONE,

@@ -161,7 +161,7 @@ class PolicyRunner:
     between the world it trained in and the world it is being watched in makes the
     watching worthless -- and the differences that matter are small ones, like
     whether capture is checked every substep or once a decision.  So this steps
-    `TrainEnv` at batch 1 and reads its state out.  There is exactly one physics.
+    `Env` at batch 1 and reads its state out.  There is exactly one physics.
 
     One person, because that is what the policy's observation contract describes.
     The crowd view is `Runner`, and has no drones.
@@ -169,13 +169,13 @@ class PolicyRunner:
 
     def __init__(self, scenario, checkpoint: str | None = None, device: str = "cpu",
                  fidelity: str = "quadrotor", detector: str = "geometric"):
-        from hadrsim.envs.train import TrainEnv
+        from hadrsim.env import Env
         from hadrsim.policy import base
 
         # Full fidelity: the quadrotor tier and the detector that can miss -- the world
         # the policies since 14 Sep were trained in.  Showing them anything easier would
         # be showing a policy flying a world it never learned.
-        self.env = TrainEnv(scenario, batch=1, fidelity=fidelity, detector=detector,
+        self.env = Env(scenario, batch=1, fidelity=fidelity, detector=detector,
                             device=device)
         self.scenario = self.env.scenario
         self.terrain = self.env.terrain

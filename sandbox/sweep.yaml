@@ -1,7 +1,7 @@
 # wandb sweep over the learner's own knobs -- the ones never varied so far.
 #   wandb sweep sandbox/sweep.yaml          -> prints a sweep id
 #   wandb agent <id>                        -> one per GPU
-program: sandbox/train.py
+program: -m hadrsim.train
 method: bayes
 metric: {name: eval/best, goal: maximize}
 parameters:

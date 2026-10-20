@@ -24,7 +24,7 @@ import torch
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1]))
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
 
-from hadrsim.envs.train import TrainEnv
+from hadrsim.env import Env
 from hadrsim.policy import base
 from hadrsim.scenario import Scenario, autoplace
 from hadrsim.viz.render import Recorder
@@ -54,7 +54,7 @@ if a.paper:
     from paper_parity import build
     env = build(batch=1, device=dev, pairs=40)
 else:
-    env = TrainEnv(autoplace(Scenario.preset(
+    env = Env(autoplace(Scenario.preset(
         a.city, radius_m=a.radius, cell_size_m=2.0,
         episode_seconds=a.seconds, wind_mps=0.0, seed=0)), batch=1,
         fidelity=a.fidelity, detector=a.detector, device=dev)

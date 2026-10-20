@@ -1,4 +1,6 @@
-"""The training environment: thousands of cities burning at once.
+"""The environment: thousands of cities burning at once, stepped together.
+
+This is the gym -- `reset()` and `step(actions)` -- and it contains no learning.
 
 Everything so far has been one world at a time.  This is where the batch dimension
 finally earns itself -- the whole point of writing world, agents and sensing over
@@ -13,9 +15,8 @@ The loop, per policy decision:
     reset     ->  environments that finished, in place
 
 **No graphics, no ROS, no python loop over environments.**  A function that only
-handles one simulation is a hidden slow loop waiting to happen, and the running
-environment is a different file for a reason: this one exists to be fast, and that
-one to be watchable and to speak to real hardware.
+handles one simulation is a hidden slow loop waiting to happen.  The panel drives
+this same class at batch 1, so there is exactly one physics.
 
 **Beliefs, not truth.**  Observations and rewards are both assembled from
 `Detections`.  The 2D simulator's rewards read ground-truth visibility on their own,
@@ -50,7 +51,7 @@ CAPTURE_RADIUS_M = 3.0
 HLR, LLR = 0, 1
 
 
-class TrainEnv:
+class Env:
     """A batch of independent episodes sharing one city."""
 
     # An altitude band per role, because the roles *are* altitude bands.  The high

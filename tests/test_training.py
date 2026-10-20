@@ -15,7 +15,7 @@ import pytest
 import torch
 
 from hadrsim.core import spec
-from hadrsim.envs.train import TrainEnv
+from hadrsim.env import Env
 from hadrsim.reward.compose import DEFAULT, Composer
 from hadrsim.reward.terms import ALL, View
 from hadrsim.scenario import Scenario
@@ -205,7 +205,7 @@ def test_ablation_drops_terms():
 
 @pytest.fixture(scope="module")
 def env():
-    return TrainEnv(small(), batch=8)
+    return Env(small(), batch=8)
 
 
 def test_observations_match_the_contract(env):
@@ -244,7 +244,7 @@ def test_an_episode_ends_on_time(env):
 def test_drones_launch_from_a_base_not_the_persons_doorstep():
     """Starting them on top of each other makes the task trivial: a policy that
     captures on the first step has learned nothing about searching."""
-    e = TrainEnv(small(), batch=4)
+    e = Env(small(), batch=4)
     e.reset()
     gap = (e.drones[1].pos[:, :2] - e.human.pos).norm(dim=-1)
     assert float(gap.min()) > 10.0, "the low rescuer starts within arm's reach"
@@ -252,13 +252,13 @@ def test_drones_launch_from_a_base_not_the_persons_doorstep():
 
 def test_the_two_drones_fly_at_different_altitudes():
     """High and wide against low and narrow is the paper's whole premise."""
-    e = TrainEnv(small(), batch=4)
+    e = Env(small(), batch=4)
     e.reset()
     assert float(e.drones[0].pos[:, 2].mean()) > float(e.drones[1].pos[:, 2].mean()) + 20
 
 
 def test_the_environment_is_reproducible():
-    a, b = TrainEnv(small(), batch=4), TrainEnv(small(), batch=4)
+    a, b = Env(small(), batch=4), Env(small(), batch=4)
     act = torch.zeros(4, 2, 4)
     for _ in range(4):
         _, ra, _, _ = a.step(act)
@@ -271,7 +271,7 @@ def test_the_environment_is_reproducible():
 def test_the_policy_produces_commands_inside_the_contract():
     from hadrsim.policy.ppo import ActorCritic
 
-    e = TrainEnv(small(), batch=4)
+    e = Env(small(), batch=4)
     net = ActorCritic()
     action, logp, value, state = net.act(e.reset())
     assert action.shape == (4, 2, spec.ACTION_DIM)
@@ -283,7 +283,7 @@ def test_the_policy_produces_commands_inside_the_contract():
 def test_both_encoders_work(encoder):
     from hadrsim.policy.ppo import ActorCritic
 
-    e = TrainEnv(small(), batch=4)
+    e = Env(small(), batch=4)
     action, _, _, _ = ActorCritic(encoder).act(e.reset())
     assert torch.isfinite(action).all()
 
@@ -296,7 +296,7 @@ def test_the_policy_can_learn_something():
     """
     from hadrsim.policy.ppo import PPO, PPOConfig
 
-    e = TrainEnv(small(), batch=32)
+    e = Env(small(), batch=32)
     ppo = PPO(e, PPOConfig(horizon=6, epochs=2))
     before = [p.detach().clone() for p in ppo.net.parameters()]
     history = ppo.train(3, log_every=99)

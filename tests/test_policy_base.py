@@ -8,7 +8,7 @@ import torch
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1]))
 
 from hadrsim.core import spec
-from hadrsim.envs.train import TrainEnv
+from hadrsim.env import Env
 from hadrsim.eval import evaluate
 from hadrsim.policy import base
 from hadrsim.policy.ppo import PPO, PPOConfig
@@ -18,7 +18,7 @@ from hadrsim.scenario import Scenario, autoplace
 def _env(batch=4):
     sc = autoplace(Scenario.preset("Paper grid (25 m)", cell_size_m=1.0, episode_seconds=10.0,
                                    wind_mps=0.0, seed=1))
-    return TrainEnv(sc, batch=batch, fidelity="kinematic", device="cpu")
+    return Env(sc, batch=batch, fidelity="kinematic", device="cpu")
 
 
 def test_every_scripted_baseline_emits_a_contract_action():

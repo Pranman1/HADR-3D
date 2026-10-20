@@ -26,7 +26,7 @@ import torch
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1]))
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
 
-from hadrsim.envs.train import TrainEnv
+from hadrsim.env import Env
 from hadrsim.eval import evaluate
 from hadrsim.policy import base
 from hadrsim.scenario import PRESETS, Scenario, autoplace
@@ -70,7 +70,7 @@ for name in PRESETS:
         print(f"{name:<24}  not cached, skipped")
         continue
 
-    env = TrainEnv(autoplace(sc), batch=a.batch, fidelity=a.fidelity, detector=a.detector, device=dev)
+    env = Env(autoplace(sc), batch=a.batch, fidelity=a.fidelity, detector=a.detector, device=dev)
     env.launch_offset_m = a.launch
     built = float((env.terrain.solid_top > 0).float().mean()) * 100
     base = run(env, None)[0]
