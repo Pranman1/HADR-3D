@@ -1,9 +1,31 @@
 [project]
 name = "hadrsim"
-version = "0.0.1"
-description = "3D continuous-time simulator for UAV-assisted fire evacuation"
+version = "0.1.0"
+description = "A 3D simulator and gym for drone-assisted fire evacuation: real city blocks, quadrotor physics, cameras that can miss, and a reward that reads only what the drones believe."
+readme = "README.md"
 requires-python = ">=3.10"
-dependencies = ["torch", "numpy", "pyyaml", "rerun-sdk"]
+license = { text = "MIT" }
+dependencies = [
+    "torch>=2.1",
+    "numpy",
+    "pyyaml",
+    "requests",            # OpenStreetMap download (cached cities need no network)
+    "matplotlib",          # polygon rasterising only (matplotlib.path)
+    "pillow",              # map and fire overlays for the panel
+    "imageio[ffmpeg]",     # hadrsim-watch video
+    "fastapi",
+    "uvicorn[standard]",   # the panel's websocket server
+]
+
+[project.optional-dependencies]
+train = ["wandb"]
+dev = ["pytest"]
+
+[project.scripts]
+hadrsim-panel = "hadrsim.gui.server:main"
+hadrsim-train = "hadrsim.train:main"
+hadrsim-eval = "hadrsim.eval:main"
+hadrsim-watch = "hadrsim.viz.render:main"
 
 [build-system]
 requires = ["setuptools>=61"]
@@ -12,8 +34,11 @@ build-backend = "setuptools.build_meta"
 [tool.setuptools.packages.find]
 include = ["hadrsim*"]
 
+[tool.setuptools.package-data]
+hadrsim = ["configs/**/*.yaml", "gui/*.html", "gui/*.js"]
+
 [tool.pytest.ini_options]
-# The box has ROS 2 Humble on the path and its pytest plugins break collection.
-# We want ROS available for the running environment, just not inside unit tests.
+# The lab box has ROS 2 on the path and its pytest plugins break collection;
+# run with PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 there.
 addopts = "-p no:cacheprovider"
 testpaths = ["tests"]
