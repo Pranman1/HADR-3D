@@ -1,19 +1,12 @@
 """Running a scenario, one step at a time.
 
-Sits between a `Scenario` and whatever is watching: a GUI stepping it in real time,
-a script rendering it to a video, or eventually the training loop.  All three drive
-the same object, which is the point -- a control panel that steps the world even
-slightly differently from the trainer is telling you about a world nobody trained
-in.
+Two runners behind one interface (`reset`, `step`, `advance(seconds)`, `snapshot`,
+`time`, `done`):
 
-Stepping is exposed at two levels.  `step()` advances one physics tick, which is
-what the clock actually means; `advance(seconds)` runs however many of those fit,
-which is what a caller wanting a frame actually wants.  Keeping them apart is what
-lets the GUI run at whatever rate the browser can manage without the simulation
-noticing.
-
-The drone and policy slots are wired and empty.  There is no policy yet; when there
-is, it plugs in here and nothing above changes.
+- `Runner` steps fire, smoke, wind and a crowd of people itself.  No drones.
+- `PolicyRunner` wraps `Env` at batch 1 and flies a policy in it.  One person, two
+  drones, exactly the physics the policy trained in -- a viewer that stepped the world
+  even slightly differently would be showing a world nobody trained in.
 """
 
 from __future__ import annotations
@@ -40,10 +33,17 @@ class Snapshot:
     t: float
     burning: int
     burnt: int
-    humans: list = field(default_factory=list)   # {x, y, panic, speed, reached}
+    humans: list = field(default_factory=list)   # {x, y, panic, speed, reached, ...}
     drones: list = field(default_factory=list)
     reached: int = 0
     done: bool = False
+
+
+def _person(h, i: int, cell: float, **extra) -> dict:
+    """One person in cell coordinates, for either runner's snapshot."""
+    return {"x": round(float(h.pos[i, 0] / cell), 2), "y": round(float(h.pos[i, 1] / cell), 2),
+            "panic": round(float(h.gamma[i]), 3), "speed": round(float(h.vel[i].norm()), 2),
+            "reached": bool(h.reached[i]), **extra}
 
 
 class Runner:
@@ -126,24 +126,11 @@ class Runner:
 
     def snapshot(self) -> Snapshot:
         cell = self.terrain.cell_size_m
-        pos = self.human.pos.cpu()
         return Snapshot(
             t=round(self.time, 2),
-            burning=int(self.fire.burning[0].sum()),
-            burnt=int(self.fire.burnt[0].sum()),
-            humans=[
-                {
-                    "x": round(float(pos[i, 0] / cell), 2),
-                    "y": round(float(pos[i, 1] / cell), 2),
-                    "panic": round(float(self.human.gamma[i]), 3),
-                    "speed": round(float(self.human.vel[i].norm()), 2),
-                    "reached": bool(self.human.reached[i]),
-                }
-                for i in range(len(pos))
-            ],
-            drones=[],                      # nothing flies yet
-            reached=int(self.human.reached.sum()),
-            done=self.done,
+            burning=int(self.fire.burning[0].sum()), burnt=int(self.fire.burnt[0].sum()),
+            humans=[_person(self.human, i, cell) for i in range(len(self.human.pos))],
+            reached=int(self.human.reached.sum()), done=self.done,
         )
 
 
@@ -153,30 +140,14 @@ def _tile(values: list, n: int) -> list:
 
 
 class PolicyRunner:
-    """A live scenario with drones flying a trained policy.
-
-    Deliberately a *wrapper around the training environment* rather than a second
-    implementation.  `Runner` above steps fire, smoke, wind and people itself, which
-    is fine while nothing flies; the moment a policy is involved, any difference
-    between the world it trained in and the world it is being watched in makes the
-    watching worthless -- and the differences that matter are small ones, like
-    whether capture is checked every substep or once a decision.  So this steps
-    `Env` at batch 1 and reads its state out.  There is exactly one physics.
-
-    One person, because that is what the policy's observation contract describes.
-    The crowd view is `Runner`, and has no drones.
-    """
+    """A live scenario with drones flying a policy: `Env` at batch 1, read out."""
 
     def __init__(self, scenario, checkpoint: str | None = None, device: str = "cpu",
                  fidelity: str = "quadrotor", detector: str = "geometric"):
         from hadrsim.env import Env
         from hadrsim.policy import base
 
-        # Full fidelity: the quadrotor tier and the detector that can miss -- the world
-        # the policies since 14 Sep were trained in.  Showing them anything easier would
-        # be showing a policy flying a world it never learned.
-        self.env = Env(scenario, batch=1, fidelity=fidelity, detector=detector,
-                            device=device)
+        self.env = Env(scenario, batch=1, fidelity=fidelity, detector=detector, device=device)
         self.scenario = self.env.scenario
         self.terrain = self.env.terrain
         self.clock = self.env.clock
@@ -249,14 +220,9 @@ class PolicyRunner:
             cam = e.cameras[i]
             reach = float(fov_mod.ground_footprint(cam, d.pos, d.quat)[0])
             roll, pitch = d.attitude
-            # The direction the camera actually looks, in the world, through the
-            # airframe's attitude -- so the 3D view draws the exact cone the detector
-            # tests against.  A forward camera on a leaning drone is not looking
-            # straight down, and a view that drew it that way would be showing a
-            # sensor that does not exist.
+            # Camera axis and airframe forward/up in the world, through the attitude,
+            # so the 3D view draws the exact cone the detector tests against.
             axis = fov_mod.look_direction(cam, d.quat)[0].tolist()
-            # The airframe's own forward and up, likewise in the world, so the model
-            # is drawn at the attitude the physics has it at rather than level.
             ex = torch.tensor([[1.0, 0.0, 0.0]], device=d.quat.device)
             ez = torch.tensor([[0.0, 0.0, 1.0]], device=d.quat.device)
             fwd = rot.rotate(d.quat[:1], ex)[0].tolist()
@@ -280,18 +246,7 @@ class PolicyRunner:
             })
         return Snapshot(
             t=round(self.time, 2),
-            burning=int(e.fire.burning[0].sum()),
-            burnt=int(e.fire.burnt[0].sum()),
-            humans=[{
-                "x": round(float(e.human.pos[0, 0] / cell), 2),
-                "y": round(float(e.human.pos[0, 1] / cell), 2),
-                "panic": round(float(e.human.gamma[0]), 3),
-                "speed": round(float(e.human.vel[0].norm()), 2),
-                "reached": bool(e.human.reached[0]),
-                "harmed": bool(e.human.harmed[0]),
-                "captured": bool(e.captured[0]),
-            }],
-            drones=drones,
-            reached=int(e.human.reached[0]),
-            done=self.done,
+            burning=int(e.fire.burning[0].sum()), burnt=int(e.fire.burnt[0].sum()),
+            humans=[_person(e.human, 0, cell, harmed=bool(e.human.harmed[0]), captured=bool(e.captured[0]))],
+            drones=drones, reached=int(e.human.reached[0]), done=self.done,
         )

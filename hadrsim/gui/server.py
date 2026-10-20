@@ -21,21 +21,18 @@ Pick none and it is `Runner`, which has no drones but will carry a crowd.
 from __future__ import annotations
 
 import asyncio
-import base64
-import io
 import json
-import time
 import re
+import time
 from pathlib import Path
 
-import numpy as np
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse, HTMLResponse
 
+from hadrsim.gui import encode
 from hadrsim.policy.base import SCRIPTED
 from hadrsim.runner import PolicyRunner, Runner
 from hadrsim.scenario import PRESETS, Scenario
-from hadrsim.viz.render import Recorder
 
 app = FastAPI(title="hadrsim")
 HERE = Path(__file__).parent
@@ -48,10 +45,7 @@ def index() -> str:
 
 @app.get("/{name}.js")
 def script(name: str) -> FileResponse:
-    """three.js and the 3D scene, served from beside this file.
-
-    Vendored rather than pulled from a CDN so the panel works on a machine with no
-    internet, which a lab GPU box often is."""
+    """three.js and the 3D scene, vendored so the panel works with no internet."""
     f = (HERE / f"{name}.js").resolve()
     if f.parent != HERE.resolve() or not f.is_file():
         raise ValueError("no such script")
@@ -60,12 +54,10 @@ def script(name: str) -> FileResponse:
 
 @app.get("/policies")
 def policies() -> dict:
-    """Checkpoints on disk, newest first, so the panel lists what actually exists."""
+    """Scripted baselines, then checkpoints on disk newest first (per-iteration
+    snapshots `*_i0025.pt` hidden -- they would bury the dropdown)."""
     root = Path.cwd() / "checkpoints"
     found = sorted(root.glob("*.pt"), key=lambda f: -f.stat().st_mtime) if root.is_dir() else []
-    # The keep-best runs save a snapshot every 25 iterations (`*_i0025.pt` ...).  They
-    # stay on disk for analysis but would bury the dropdown; the `_best` and final
-    # checkpoints are the ones to fly.
     found = [f for f in found if not re.search(r"_i\d{4}$", f.stem)]
     scripted = [{"path": k, "name": f"baseline: {k}", "size_mb": 0.0} for k in SCRIPTED]
     return {"policies": scripted + [{"path": str(f), "name": f.stem,
@@ -74,17 +66,9 @@ def policies() -> dict:
 
 @app.get("/presets")
 def presets(radius_m: float = 100.0) -> dict:
-    """Cities, flagged by whether their map is already on disk.
-
-    An uncached city needs an Overpass query, and Overpass bans a host that asks too
-    often -- so clicking one can hang for minutes with nothing on screen. Better to
-    say so in the dropdown than to discover it in front of an audience.
-
-    Checked at the radius actually in the form, because the cache is keyed on the
-    bounding box: the same city at 100 m and at 180 m are two different downloads,
-    and reporting on the preset's default radius marks cities unavailable that are
-    sitting on disk at the radius about to be used.
-    """
+    """Cities, flagged by whether their map is cached at *this* radius (the cache is
+    keyed on the bounding box). An uncached city means an Overpass download, which can
+    take minutes and can get the host banned, so the dropdown says so up front."""
     from hadrsim.world import osm
 
     cache = Path.cwd() / "maps" / "osm_cache"
@@ -100,97 +84,6 @@ def presets(radius_m: float = 100.0) -> dict:
             "defaults": Scenario().to_dict()}
 
 
-def _map_png(runner: Runner) -> str:
-    """The static city, as a data URI. Sent once per scenario, not per frame."""
-    from PIL import Image
-
-    img = Recorder(runner.terrain, scale=1)._base
-    buf = io.BytesIO()
-    # Transposed because the renderer works in image order and the client draws in
-    # world order; doing it here keeps the coordinate maths in the browser trivial.
-    Image.fromarray(img).save(buf, format="PNG")
-    return "data:image/png;base64," + base64.b64encode(buf.getvalue()).decode()
-
-
-def _heights(runner) -> dict:
-    """Building heights, run-length encoded, for the 3D view to extrude.
-
-    Sent once per scenario alongside the map.  A 300 m block at 2 m cells is 150x150
-    numbers; raw JSON of that is about 90 kB and most of it is zero, so runs of equal
-    height collapse it to a few kB.
-    """
-    h = runner.terrain.solid_top.cpu().numpy().T.round(1)
-    flat, runs = h.reshape(-1), []
-    prev, count = None, 0
-    for v in flat.tolist():
-        if v == prev:
-            count += 1
-        else:
-            if prev is not None:
-                runs.append([prev, count])
-            prev, count = v, 1
-    runs.append([prev, count])
-    return {"w": int(h.shape[1]), "h": int(h.shape[0]), "runs": runs}
-
-
-def _wind(runner) -> list:
-    """The wind right now, as [east, north] m/s, for the smoke columns to lean with."""
-    w = getattr(runner, "wind", None)
-    if w is None:
-        return [0.0, 0.0]
-    v = w.velocity[0]
-    return [round(float(v[0]), 2), round(float(v[1]), 2)]
-
-
-def _flames(runner, cap: int = 600) -> list:
-    """Where the fire actually is, as cells, for the 3D view to stand flames on.
-
-    The ground overlay already carries this as a picture; a picture cannot be three
-    dimensional.  Capped, and the hottest kept, because a late-stage fire can be
-    thousands of cells and the frame budget is a few hundred.
-    """
-    heat = runner.fire.intensity[0]
-    idx = (heat > 0.05).nonzero()
-    if not len(idx):
-        return []
-    v = heat[idx[:, 0], idx[:, 1]]
-    if len(idx) > cap:
-        keep = v.topk(cap).indices
-        idx, v = idx[keep], v[keep]
-    return [[int(a), int(b), round(float(c), 2)]
-            for (a, b), c in zip(idx.tolist(), v.tolist())]
-
-
-def _fire_png(runner: Runner) -> str:
-    """Fire, burn scar and smoke as one RGBA overlay, at cell resolution."""
-    from PIL import Image
-    from hadrsim.viz.render import C_BURNT, C_FIRE_COOL, C_FIRE_HOT, C_SMOKE
-
-    heat = runner.fire.intensity[0].cpu().numpy().T
-    burnt = runner.fire.burnt[0].cpu().numpy().T
-    col = runner.smoke.column_density()[0].cpu().numpy().T
-
-    h, w = heat.shape
-    rgba = np.zeros((h, w, 4), dtype=np.float32)
-    rgba[burnt, :3] = C_BURNT
-    rgba[burnt, 3] = 255
-
-    alight = heat > 0
-    if alight.any():
-        v = heat[alight][:, None]
-        rgba[alight, :3] = C_FIRE_COOL + v * (C_FIRE_HOT - C_FIRE_COOL)
-        rgba[alight, 3] = 255
-
-    smoke_a = np.clip(col / 2.5, 0, 0.8) * 255
-    veil = smoke_a > rgba[..., 3]
-    rgba[veil, :3] = C_SMOKE
-    rgba[veil, 3] = smoke_a[veil]
-
-    buf = io.BytesIO()
-    Image.fromarray(rgba.clip(0, 255).astype(np.uint8), mode="RGBA").save(buf, "PNG")
-    return "data:image/png;base64," + base64.b64encode(buf.getvalue()).decode()
-
-
 @app.websocket("/live")
 async def live(ws: WebSocket) -> None:
     await ws.accept()
@@ -201,8 +94,7 @@ async def live(ws: WebSocket) -> None:
     async def build(cfg: dict) -> None:
         nonlocal runner, playing
         playing = False
-        # Terrain fetch and rasterising blocks; off the event loop so the socket
-        # stays responsive and the client can show "loading" rather than freezing.
+        # Terrain fetch and rasterising block; off the event loop so the socket stays responsive.
         sc = Scenario.from_dict(cfg)
         pick = cfg.get("policy") or "none"
         if pick == "none":
@@ -216,8 +108,8 @@ async def live(ws: WebSocket) -> None:
             "type": "scenario",
             "width": t.shape[0], "height": t.shape[1],
             "cell": t.cell_size_m,
-            "map": _map_png(runner),
-            "heights": _heights(runner),
+            "map": encode.map_png(runner),
+            "heights": encode.heights(runner),
             "config": runner.scenario.to_dict(),
             "flying": bool(getattr(runner, "net", None) is not None),
         }))
@@ -226,9 +118,9 @@ async def live(ws: WebSocket) -> None:
         await ws.send_text(json.dumps({
             "type": "frame",
             "state": runner.snapshot().__dict__,
-            "fire": _fire_png(runner),
-            "flames": _flames(runner),
-            "wind": _wind(runner),
+            "fire": encode.fire_png(runner),
+            "flames": encode.flames(runner),
+            "wind": encode.wind(runner),
         }))
 
     try:
@@ -258,11 +150,8 @@ async def live(ws: WebSocket) -> None:
                     await push()
 
             if playing and runner and not runner.done:
-                # Paced to the wall clock.  A policy runner can only advance in whole
-                # decisions (0.5 s of simulated time), and pushing one every loop turn
-                # ran the world ten times faster than real time in 0.5 s jumps -- which
-                # is what "laggy and frame by frame" was.  Advance, then wait out the
-                # simulated time at the chosen speed before the next frame.
+                # Paced to the wall clock: advance, then wait out the simulated time
+                # at the chosen speed.  (A policy runner moves in whole 0.5 s decisions.)
                 t0 = time.monotonic()
                 before = runner.time
                 await asyncio.to_thread(runner.advance, 0.05 * speed)
@@ -294,13 +183,8 @@ def _lan_ip() -> str:
 
 
 def _free_port(start: int = 8000, tries: int = 12) -> int:
-    """The first port nothing is already listening on.
-
-    A panel left running from yesterday holds 8000, and starting a second one then
-    fails to bind -- but the banner was printed *before* the bind was attempted, so
-    it announced a URL that belonged to the old server and exited 0.  It looked like
-    it had started.  Bind first, announce second, and move over if the port is busy.
-    """
+    """The first port nothing is listening on. Bind before announcing: a panel left
+    running from yesterday holds 8000, and a banner printed before the bind lied."""
     import socket
 
     for port in range(start, start + tries):
