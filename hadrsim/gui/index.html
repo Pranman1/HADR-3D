@@ -231,10 +231,12 @@ function drawAgents(state) {
   const s = +cvAgents.dataset.s, g = cvAgents.getContext("2d");
   g.clearRect(0, 0, cvAgents.width, cvAgents.height);
 
-  const goals = cfg.human_goal || [];
+  // The exit each person is walking to (this episode's, not the config default).
+  const goals = (state.humans || []).map(h => h.goal).filter(Boolean);
+  if (!goals.length) (cfg.human_goal || []).forEach(p => goals.push([p[0] / world.cell, p[1] / world.cell]));
   g.strokeStyle = "#5cc98a"; g.lineWidth = Math.max(2, s);
   goals.forEach(p => {
-    const x = p[0] / world.cell * s, y = p[1] / world.cell * s, r = 5 * s;
+    const x = p[0] * s, y = p[1] * s, r = 5 * s;
     g.beginPath(); g.moveTo(x - r, y); g.lineTo(x + r, y);
     g.moveTo(x, y - r); g.lineTo(x, y + r); g.stroke();
   });

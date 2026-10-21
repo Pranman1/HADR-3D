@@ -216,6 +216,7 @@ export class Scene3D {
     this.rotors = [];
     for (const h of state.humans || []) g.add(this._person(h, cell));
     for (const d of state.drones || []) g.add(this._drone(d, cell));
+    for (const h of state.humans || []) if (h.goal) g.add(this._exit(h.goal, cell));
     this._swap("agents", g);
   }
 
@@ -251,6 +252,22 @@ export class Scene3D {
     beam.position.y = 25;
     g.add(body, head, beam);
     g.position.set(h.x * cell, 0, h.y * cell);
+    return g;
+  }
+
+  // The exit: a green ring on the ground and a tall beacon, so it reads from anywhere.
+  _exit(goal, cell) {
+    const g = new THREE.Group();
+    const green = new THREE.MeshBasicMaterial({ color: 0x5cc98a, transparent: true, opacity: 0.85,
+                                                side: THREE.DoubleSide, depthWrite: false });
+    const ring = new THREE.Mesh(new THREE.RingGeometry(1.6, 2.4, 32), green);
+    ring.rotation.x = -Math.PI / 2; ring.position.y = 0.3;
+    const post = new THREE.Mesh(new THREE.CylinderGeometry(0.3, 0.3, 60, 8, 1, true),
+      new THREE.MeshBasicMaterial({ color: 0x5cc98a, transparent: true, opacity: 0.35,
+                                    side: THREE.DoubleSide, depthWrite: false }));
+    post.position.y = 30;
+    g.add(ring, post);
+    g.position.set(goal[0] * cell, 0, goal[1] * cell);
     return g;
   }
 

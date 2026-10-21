@@ -36,6 +36,7 @@ def _person(h, i: int, cell: float, **extra) -> dict:
     """One person in cell coordinates, for either runner's snapshot."""
     return {"x": round(float(h.pos[i, 0] / cell), 2), "y": round(float(h.pos[i, 1] / cell), 2),
             "panic": round(float(h.gamma[i]), 3), "speed": round(float(h.vel[i].norm()), 2),
+            "goal": [round(float(h.goal[i, 0] / cell), 2), round(float(h.goal[i, 1] / cell), 2)],
             "reached": bool(h.reached[i]), **extra}
 
 

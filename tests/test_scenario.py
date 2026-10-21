@@ -158,7 +158,7 @@ def test_snapshot_is_json_shaped():
     s = r.snapshot()
     assert len(json.dumps(s.__dict__)) < 4000, "a frame must stay small enough to stream"
     assert len(s.humans) == 2
-    assert set(s.humans[0]) == {"x", "y", "panic", "speed", "reached"}
+    assert set(s.humans[0]) == {"x", "y", "panic", "speed", "reached", "goal"}
     assert s.drones == [], "nothing flies yet, and the slot should say so honestly"
 
 
