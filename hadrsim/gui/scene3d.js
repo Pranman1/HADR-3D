@@ -267,8 +267,10 @@ export class Scene3D {
     head.position.y = 1.62 * s; head.castShadow = true;
     // A column of light: a person is findable on a 300 m block, and this is where
     // "reached safety" turns quiet.
+    // The column takes the state's colour: grey once lost, blue while led, green while in view.
+    const glow = h.harmed ? 0x6b6b6b : h.captured ? 0x8fd0ff : h.seen ? 0x7ce8b0 : c;
     const beam = new THREE.Mesh(new THREE.CylinderGeometry(0.25, 0.6, 50, 8, 1, true),
-      new THREE.MeshBasicMaterial({ color: c, transparent: true, opacity: h.reached ? 0.06 : 0.16,
+      new THREE.MeshBasicMaterial({ color: glow, transparent: true, opacity: h.reached ? 0.06 : 0.16,
                                     side: THREE.DoubleSide, depthWrite: false }));
     beam.position.y = 25;
     g.add(body, head, beam);

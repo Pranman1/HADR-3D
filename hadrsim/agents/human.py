@@ -49,6 +49,7 @@ class Human:
         self.reached = torch.zeros(batch, dtype=torch.bool, device=self.device)
         self.harmed = torch.zeros(batch, dtype=torch.bool, device=self.device)
         self.following = torch.zeros(batch, dtype=torch.bool, device=self.device)
+        self.trapped = torch.zeros(batch, dtype=torch.bool, device=self.device)   # no route past the fire
         self.instinct_dir = z(batch, 2)
         self.elapsed = 0.0
 
@@ -69,6 +70,7 @@ class Human:
         self.reached.zero_()
         self.harmed.zero_()
         self.following.zero_()
+        self.trapped.zero_()
         self.elapsed = 0.0
 
         clear = nav.clearance(self.terrain.walkable, cell)
@@ -93,6 +95,7 @@ class Human:
             self._dist = nav.distance_field(passable, goal, cell, cost=cost)
 
             stuck = nav.sample(self._dist, self.pos, cell) >= nav.UNREACHABLE / 2
+            self.trapped = stuck
             if bool(stuck.any()):
                 worst = cost + 1e3 * fire.burning.float()
                 fallback = nav.distance_field(self._passable, goal, cell, cost=worst)

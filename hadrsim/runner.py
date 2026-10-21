@@ -37,7 +37,7 @@ def _person(h, i: int, cell: float, **extra) -> dict:
     return {"x": round(float(h.pos[i, 0] / cell), 2), "y": round(float(h.pos[i, 1] / cell), 2),
             "panic": round(float(h.gamma[i]), 3), "speed": round(float(h.vel[i].norm()), 2),
             "goal": [round(float(h.goal[i, 0] / cell), 2), round(float(h.goal[i, 1] / cell), 2)],
-            "reached": bool(h.reached[i]), **extra}
+            "reached": bool(h.reached[i]), "trapped": bool(h.trapped[i]), **extra}
 
 
 class Runner:
@@ -247,6 +247,7 @@ class PolicyRunner:
         return Snapshot(
             t=round(self.time, 2),
             burning=int(e.fire.burning[0].sum()), burnt=int(e.fire.burnt[0].sum()),
-            humans=[_person(e.human, 0, cell, harmed=bool(e.human.harmed[0]), captured=bool(e.captured[0]))],
+            humans=[_person(e.human, 0, cell, harmed=bool(e.human.harmed[0]), captured=bool(e.captured[0]),
+                            seen=bool(any(seen)))],
             drones=drones, reached=int(e.human.reached[0]), done=self.done,
         )

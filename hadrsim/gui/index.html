@@ -49,11 +49,19 @@
             line-height: 1.7; pointer-events: none; }
   #legend i { display: inline-block; width: 9px; height: 9px; border-radius: 2px;
               margin-right: 6px; vertical-align: -1px; }
-  #bar { display: flex; align-items: center; gap: 14px; padding: 10px 16px;
+  #bar { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 14px; padding: 10px 16px;
          border-top: 1px solid var(--line); background: var(--panel); font-size: 12px; }
   .stat b { color: var(--ink); font-variant-numeric: tabular-nums; }
   .stat span { color: var(--dim); }
   .hint { color: var(--dim); font-size: 11px; margin-top: 6px; }
+  #states { display: flex; gap: 6px; }
+  .pill { padding: 3px 9px; border-radius: 10px; border: 1px solid var(--line); font-size: 11px;
+          color: var(--dim); opacity: .4; white-space: nowrap; }
+  .pill.on { opacity: 1; color: #16161a; font-weight: 600; border-color: transparent; }
+  .pill.on[data-k=searching] { background: #9aa0ad; } .pill.on[data-k=seen]     { background: #7ce8b0; }
+  .pill.on[data-k=led]       { background: #8fd0ff; } .pill.on[data-k=panic]    { background: #f0a050; }
+  .pill.on[data-k=trapped]   { background: #e45c3a; } .pill.on[data-k=safe]     { background: #5cc98a; }
+  .pill.on[data-k=lost]      { background: #c0392b; color: #fff; }
   .pill { display: inline-block; padding: 1px 6px; border-radius: 999px;
           background: #262630; color: var(--dim); font-size: 10px; margin-left: 6px; }
   .place-mode { outline: 2px solid var(--hot); }
@@ -146,7 +154,15 @@
     <span class="stat"><span>burning</span> <b id="burning">0</b></span>
     <span class="stat"><span>burnt</span> <b id="burnt">0</b></span>
     <span class="stat"><span>safe</span> <b id="safe">0</b></span>
-    <span class="stat"><span>rescue</span> <b id="rescue">—</b></span>
+    <span id="states">
+      <span class="pill" data-k="searching">searching</span>
+      <span class="pill" data-k="seen">in view</span>
+      <span class="pill" data-k="led">being led</span>
+      <span class="pill" data-k="panic">panicking</span>
+      <span class="pill" data-k="trapped">trapped</span>
+      <span class="pill" data-k="safe">safe</span>
+      <span class="pill" data-k="lost">lost</span>
+    </span>
     <span class="stat" id="status" style="margin-left:auto;color:var(--dim)">idle</span>
   </div>
 </main>
@@ -226,6 +242,15 @@ function fit() {
 }
 addEventListener("resize", fit);
 
+// The evacuee's state, as lit pills in the bar. Several can be on at once.
+function showStates(h) {
+  const over = h.reached || h.harmed;
+  const on = { lost: !!h.harmed, safe: !!h.reached, trapped: h.trapped && !over,
+               led: h.captured && !over, seen: h.seen && !over, panic: h.panic > 0.5 && !over,
+               searching: !!(world && world.flying) && !h.seen && !h.captured && !over };
+  document.querySelectorAll("#states .pill").forEach(p => p.classList.toggle("on", !!on[p.dataset.k]));
+}
+
 // ---------------------------------------------------------------- drawing
 function drawAgents(state) {
   const s = +cvAgents.dataset.s, g = cvAgents.getContext("2d");
@@ -246,7 +271,8 @@ function drawAgents(state) {
     g.fillStyle = `rgb(${228 + c * 8},${230 - c * 138},${236 - c * 178})`;
     g.beginPath();
     g.arc(h.x * s, h.y * s, Math.max(3, 2.2 * s), 0, 7); g.fill();
-    if (h.reached) { g.strokeStyle = "#5cc98a"; g.lineWidth = 2; g.stroke(); }
+    const ring = h.harmed ? "#6b6b6b" : h.reached ? "#5cc98a" : h.captured ? "#8fd0ff" : h.seen ? "#7ce8b0" : null;
+    if (ring) { g.strokeStyle = ring; g.lineWidth = 2; g.stroke(); }
   });
 
   (state.drones || []).forEach(d => {
@@ -303,7 +329,7 @@ function connect() {
       blit(cvMap, m.map, m.width, m.height);
       fit();
       if (three) three.setScenario(m);
-      $("rescue").textContent = m.flying ? "flying" : "—";
+      showStates({});
       $("status").textContent = "ready";
       ["play", "step", "reset"].forEach(b => $(b).disabled = false);
     } else if (m.type === "frame") {
@@ -318,9 +344,7 @@ function connect() {
       blit(cvFire, m.fire, world.width, world.height);
       if (three) three.setFrame(st, m.fire, m.flames, m.wind);
       drawAgents(st);
-      const h = (st.humans || [])[0] || {};
-      $("rescue").textContent = h.harmed ? "lost" : h.reached ? "safe"
-                              : h.captured ? "being led" : world.flying ? "searching" : "—";
+      showStates((st.humans || [])[0] || {});
       $("t").textContent = st.t.toFixed(1);
       $("burning").textContent = st.burning;
       $("burnt").textContent = st.burnt;
