@@ -123,7 +123,7 @@ a scripted baseline (`hover`, `lawnmower`, `last_sighting`).
 
 ### Watching
 `runner.py` → `PolicyRunner` wraps an `Env` of batch 1 and a policy;
-`gui/server.py` serves the panel and streams frames; `gui/index.html` draws the plan
+`gui/server.py` serves the panel and streams a frame every 50 ms of simulated time; `gui/index.html` draws the plan
 view and `gui/scene3d.js` the 3D one. `viz/render.py` writes mp4s.
 
 ---
@@ -238,7 +238,7 @@ view and `gui/scene3d.js` the 3D one. `viz/render.py` writes mp4s.
 - **`reward_sweep.py`** — the seven reward balances, through `train()`.
 - **`sweep.yaml`** — a wandb sweep over `hadrsim-train`'s flags.
 
-### `tests/` — 195 tests; `test_golden.py` is the bit-for-bit refactor guard. CI runs them on CPU.
+### `tests/` — 188 tests; `test_golden.py` is the bit-for-bit refactor guard. CI runs them on CPU.
 ### documents
 `OVERNIGHT_FINDINGS.md` (what was found, section by section, with measurements),
 `PENDING.md` (ordered next steps).

@@ -66,8 +66,7 @@ Ordered by what I would do next. Each line says why, and roughly how big.
 
 ## Infrastructure
 
-16. **Push the repo.** ~20 commits, all local; CI (`.github/workflows/ci.yml`)
-    runs on the first push. *One command, yours.*
+16. ~~Push the repo.~~ Done 20 Oct: github.com/Pranman1/HADR-3D, CI green.
 17. **`nvidia-*` in the apt blacklist**, so unattended-upgrades cannot break CUDA
     mid-run again. *Your call.*
 18. **Overpass.** Only the ten presets at 100 m radius are cached; any other radius

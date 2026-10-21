@@ -26,7 +26,7 @@ class Snapshot:
     t: float
     burning: int
     burnt: int
-    humans: list = field(default_factory=list)   # {x, y, panic, speed, reached, ...}
+    humans: list = field(default_factory=list)   # {x, y, goal, panic, speed, reached, trapped, ...}
     drones: list = field(default_factory=list)
     reached: int = 0
     done: bool = False
@@ -159,7 +159,7 @@ class PolicyRunner:
 
     @property
     def time(self) -> float:
-        return (float(self.env.step_count[0]) + self._tick / self.clock.substeps) * self.clock.control_dt
+        return (float(self.env.step_count[0]) + self._ticks / self.clock.substeps) * self.clock.control_dt
 
     @property
     def done(self) -> bool:
@@ -170,13 +170,13 @@ class PolicyRunner:
         self.obs = self.env.reset()
         self.state = None
         self.trail: list[list[float]] = [[], []]
-        self._tick = 0                    # physics ticks into the current decision
+        self._ticks = 0                   # physics ticks into the current decision
 
     # ------------------------------------------------------------------- step
 
     def step(self) -> None:
         """One policy decision, and the half-second of flight that follows it."""
-        self.advance_ticks(self.clock.substeps - self._tick)
+        self.advance_ticks(self.clock.substeps - self._ticks)
 
     def advance(self, seconds: float) -> None:
         self.advance_ticks(max(1, round(seconds * self.clock.physics_hz)))
@@ -188,7 +188,7 @@ class PolicyRunner:
             if self.done:
                 return
             with torch.no_grad():
-                if self._tick == 0:
+                if self._ticks == 0:
                     if self.net is None:
                         action = torch.zeros(1, 2, spec.ACTION_DIM, device=env.device)
                     else:
@@ -197,10 +197,10 @@ class PolicyRunner:
                     self._action = action * self._running[:, None, None].float()
                     self._reach = torch.zeros(1, dtype=torch.bool, device=env.device)
                 self._reach |= env._tick(self._action)
-                self._tick += 1
-                if self._tick == self.clock.substeps:
+                self._ticks += 1
+                if self._ticks == self.clock.substeps:
                     self.obs, _, _, self.info = env._settle(self._action, self._reach, self._running)
-                    self._tick = 0
+                    self._ticks = 0
                     self._trail()
 
     def _trail(self) -> None:

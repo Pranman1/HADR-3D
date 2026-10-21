@@ -334,9 +334,8 @@ function connect() {
       ["play", "step", "reset"].forEach(b => $(b).disabled = false);
     } else if (m.type === "frame") {
       const st = m.state;
-      // Frames arrive every simulated decision (0.5 s).  Rather than jump the agents
-      // there, tween from the previous frame over the interval, so motion reads at
-      // the display's rate while the simulation keeps its own.
+      // Frames arrive every 50 ms of simulated time. Tween from the previous one over
+      // the measured interval, so motion reads at the display's rate.
       tween.from = last ? last.state : st; tween.to = st;
       tween.t0 = performance.now(); tween.ms = last ? Math.max(60, performance.now() - tween.arrived) : 0;
       tween.arrived = performance.now(); tween.done = false;

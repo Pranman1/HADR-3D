@@ -21,6 +21,14 @@ hadrsim-watch last_sighting -o out.mp4    # any policy, any city, to video
 hadrsim-ros --ros-args -p policy:=last_sighting   # poses, detections, fire grid on /hadrsim/*
 ```
 
+## The panel
+
+`hadrsim-panel` builds any preset city, flies any policy and streams it to the browser
+at twenty frames a second of simulated time. The bar lights the evacuee's state:
+searching, in view, being led, panicking, trapped, safe, lost. The exit is the green
+cross (2D) or ring and beacon (3D). In 3D, left-drag orbits, right-drag or WASD pans,
+the wheel zooms.
+
 ## The gym
 
 ```python
@@ -56,7 +64,7 @@ hadrsim/
   ros.py      hadrsim-ros: the gym at batch 1 on ROS 2 topics (optional, needs a sourced ROS 2)
 experiments/  our research on top of the tool: city_reward.{py,yaml} (eight extra terms
               and the balance every checkpoint so far used), paper_parity, reward_sweep, sweep.yaml
-tests/        195 tests; test_golden.py is the bit-for-bit regression guard
+tests/        188 tests; test_golden.py is the bit-for-bit regression guard
 maps/         OpenStreetMap cache for the ten preset cities at 100 m radius
 ```
 
