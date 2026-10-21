@@ -159,7 +159,7 @@ class PolicyRunner:
 
     @property
     def time(self) -> float:
-        return float(self.env.step_count[0]) * self.clock.control_dt
+        return (float(self.env.step_count[0]) + self._tick / self.clock.substeps) * self.clock.control_dt
 
     @property
     def done(self) -> bool:
@@ -170,31 +170,45 @@ class PolicyRunner:
         self.obs = self.env.reset()
         self.state = None
         self.trail: list[list[float]] = [[], []]
+        self._tick = 0                    # physics ticks into the current decision
 
     # ------------------------------------------------------------------- step
 
     def step(self) -> None:
         """One policy decision, and the half-second of flight that follows it."""
-        if self.done:
-            return
-        with torch.no_grad():
-            if self.net is None:
-                action = torch.zeros(1, 2, spec.ACTION_DIM, device=self.env.device)
-            else:
-                action, _, _, self.state = self.net.act(
-                    self.obs, self.state, deterministic=True)
-            self.obs, _, _, self.info = self.env.step(action)
+        self.advance_ticks(self.clock.substeps - self._tick)
+
+    def advance(self, seconds: float) -> None:
+        self.advance_ticks(max(1, round(seconds * self.clock.physics_hz)))
+
+    def advance_ticks(self, n: int) -> None:
+        """Physics tick by tick, so a watcher can see between decisions. Same arithmetic as `Env.step`."""
+        env = self.env
+        for _ in range(n):
+            if self.done:
+                return
+            with torch.no_grad():
+                if self._tick == 0:
+                    if self.net is None:
+                        action = torch.zeros(1, 2, spec.ACTION_DIM, device=env.device)
+                    else:
+                        action, _, _, self.state = self.net.act(self.obs, self.state, deterministic=True)
+                    self._running = env.active.clone()
+                    self._action = action * self._running[:, None, None].float()
+                    self._reach = torch.zeros(1, dtype=torch.bool, device=env.device)
+                self._reach |= env._tick(self._action)
+                self._tick += 1
+                if self._tick == self.clock.substeps:
+                    self.obs, _, _, self.info = env._settle(self._action, self._reach, self._running)
+                    self._tick = 0
+                    self._trail()
+
+    def _trail(self) -> None:
         cell = self.terrain.cell_size_m
         for i, d in enumerate(self.env.drones):
             self.trail[i].append([round(float(d.pos[0, 0] / cell), 2),
                                   round(float(d.pos[0, 1] / cell), 2)])
             del self.trail[i][:-120]
-
-    def advance(self, seconds: float) -> None:
-        for _ in range(max(1, round(seconds / self.clock.control_dt))):
-            if self.done:
-                break
-            self.step()
 
     # --------------------------------------------------------------- watching
 

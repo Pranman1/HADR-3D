@@ -179,3 +179,19 @@ def test_wind_changes_where_the_fire_goes():
         return float((xs * burnt).sum() / burnt.sum().clamp_min(1))
 
     assert scar(0.0) > scar(180.0) + 2.0, "the fire should run downwind"
+
+
+def test_watching_between_decisions_changes_nothing():
+    """The panel advances physics tick by tick; the result must equal whole decisions."""
+    from hadrsim.runner import PolicyRunner
+
+    sc = berkeley(cell_size_m=2.0)
+    a = PolicyRunner(sc, "last_sighting")
+    b = PolicyRunner(sc, "last_sighting")
+    for _ in range(4):
+        a.step()
+    for _ in range(40):
+        b.advance(0.05)
+    assert a.time == b.time == 2.0
+    assert torch.equal(a.env.human.pos, b.env.human.pos)
+    assert all(torch.equal(x.pos, y.pos) for x, y in zip(a.env.drones, b.env.drones))

@@ -284,26 +284,26 @@ class Env:
 
     def _fly(self, actions: torch.Tensor) -> torch.Tensor:
         """Half a second of physics: 50 ticks of drones, person, wind and fire."""
+        reach = torch.zeros(self.batch, dtype=torch.bool, device=self.device)
+        for _ in range(self.clock.substeps):
+            reach |= self._tick(actions)
+        return reach
+
+    def _tick(self, actions: torch.Tensor) -> torch.Tensor:
+        """One physics tick. Returns which environments have the low drone within reach."""
         dt = self.clock.dt
         w_m, h_m = self.terrain.extent_m
-        llr_drone = self.drones[LLR]
-        reach = torch.zeros(self.batch, dtype=torch.bool, device=self.device)
-
-        for _ in range(self.clock.substeps):
-            for i, drone in enumerate(self.drones):
-                before = drone.pos.clone()
-                drone.step(actions[:, i], dt)
-                lo, hi = self.ALT_BANDS[i]
-                drone.confine(w_m, h_m, lo, hi)
-                self._collide(drone, before)
-            self.human.integrate(
-                self.crowd.step(self.human.pos, self.human.vel, self._want, dt), dt)
-            self.wind.step(dt, self.rng_wind)
-            self.fire.step(dt, self.wind, self.rng_fire)
-
-            reach |= ((llr_drone.pos[:, :2] - self.human.pos).norm(dim=-1)
-                      < self.capture_radius)
-        return reach
+        for i, drone in enumerate(self.drones):
+            before = drone.pos.clone()
+            drone.step(actions[:, i], dt)
+            lo, hi = self.ALT_BANDS[i]
+            drone.confine(w_m, h_m, lo, hi)
+            self._collide(drone, before)
+        self.human.integrate(
+            self.crowd.step(self.human.pos, self.human.vel, self._want, dt), dt)
+        self.wind.step(dt, self.rng_wind)
+        self.fire.step(dt, self.wind, self.rng_fire)
+        return (self.drones[LLR].pos[:, :2] - self.human.pos).norm(dim=-1) < self.capture_radius
 
     def _roof_at(self, xy: torch.Tensor) -> torch.Tensor:
         """Building height under each (..., 2) point in metres; 0 on open ground."""

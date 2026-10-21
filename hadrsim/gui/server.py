@@ -106,8 +106,9 @@ async def live(ws: WebSocket) -> None:
 
     try:
         while True:
+            t0 = time.monotonic()
             try:
-                msg = json.loads(await asyncio.wait_for(ws.receive_text(), timeout=0.05))
+                msg = json.loads(await asyncio.wait_for(ws.receive_text(), timeout=0.005 if playing else 0.05))
             except asyncio.TimeoutError:
                 msg = None
 
@@ -131,7 +132,6 @@ async def live(ws: WebSocket) -> None:
                     await push()
 
             if playing and runner and not runner.done:
-                t0 = time.monotonic()
                 before = runner.time
                 await asyncio.to_thread(runner.advance, 0.05 * speed)
                 await push()
