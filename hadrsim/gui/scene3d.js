@@ -67,19 +67,40 @@ export class Scene3D {
     const c = this.renderer.domElement;
     let down = null;
     c.style.cursor = "grab";
-    c.addEventListener("mousedown", e => { down = { x: e.clientX, y: e.clientY, ...this.orbit };
+    // Left drag orbits, right (or shift) drag pans, wheel zooms, WASD / arrows pan too.
+    c.addEventListener("mousedown", e => { down = { x: e.clientX, y: e.clientY, pan: e.button === 2 || e.shiftKey,
+                                                    target: this.target.clone(), ...this.orbit };
                                            c.style.cursor = "grabbing"; });
+    c.addEventListener("contextmenu", e => e.preventDefault());
     addEventListener("mouseup", () => { down = null; c.style.cursor = "grab"; });
     addEventListener("mousemove", e => {
       if (!down) return;
+      if (down.pan) {
+        const k = this.orbit.dist / c.clientHeight;         // screen pixels to metres at the target
+        this._pan(down.target, -(e.clientX - down.x) * k, -(e.clientY - down.y) * k);
+        return;
+      }
       this.orbit.yaw = down.yaw + (e.clientX - down.x) * 0.006;
       // Stopped short of straight down: the up vector degenerates there.
       this.orbit.pitch = Math.min(1.45, Math.max(0.05, down.pitch + (e.clientY - down.y) * 0.005));
+    });
+    addEventListener("keydown", e => {
+      if (e.target.tagName === "INPUT" || e.target.tagName === "SELECT" || !c.offsetParent) return;
+      const step = this.orbit.dist * 0.05;
+      const k = { w: [0, -1], s: [0, 1], a: [-1, 0], d: [1, 0],
+                  ArrowUp: [0, -1], ArrowDown: [0, 1], ArrowLeft: [-1, 0], ArrowRight: [1, 0] }[e.key];
+      if (k) this._pan(this.target, k[0] * step, k[1] * step);
     });
     c.addEventListener("wheel", e => {
       e.preventDefault();
       this.orbit.dist = Math.min(2200, Math.max(12, this.orbit.dist * (1 + Math.sign(e.deltaY) * 0.12)));
     }, { passive: false });
+  }
+
+  // Slide the look-at point in the ground plane: right/left and forward/back as seen from the camera.
+  _pan(from, right, back) {
+    const y = this.orbit.yaw, sy = Math.sin(y), cy = Math.cos(y);
+    this.target.set(from.x + right * cy + back * sy, from.y, from.z - right * sy + back * cy);
   }
 
   resize() {
